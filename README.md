@@ -1,6 +1,10 @@
 # argus
-Simple local communication from phone to computer 
-Notes: Not ready for release, needs configuration to specific system
+Local network communication. Use to send commands to a local server (nicknamed Argus) and have custom control over the machine. Currently supporting monitor control and machine power state control. 
+
+V1.0:
+Initial release
+V1.1:
+Working release with unit test
 
 Required Components:
 1. ControlMyMonitor.exe Available: https://www.nirsoft.net/utils/control_my_monitor.html
@@ -11,9 +15,16 @@ Required Components:
 Set-up:
 1. Install required components
 2. Update python configuration vars
-3. Run CMM.exe to find your monitor's name / serial number
-4. Run ARGUS.py
+    a. cmm.Exe (REQUIRED)
+3. Run argus.py
+4. Use argustest.py to send test commands 
 
+Sample UDP Commands:
+
+0. secret.class [target] [command] [parameter]
+1. argus.monitor 1 input usbc
+2. argus.pc sleep
+3. argus.monitor 2 brightness 100
 
 # Additional Information
 
