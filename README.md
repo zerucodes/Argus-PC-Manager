@@ -5,6 +5,8 @@ V1.0:
 Initial release
 V1.1:
 Working release with unit test
+V1.2:
+Config file, fixed bugs
 
 Required Components:
 1. ControlMyMonitor.exe Available: https://www.nirsoft.net/utils/control_my_monitor.html

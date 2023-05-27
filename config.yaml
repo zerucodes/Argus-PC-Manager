@@ -1,0 +1,6 @@
+# User specific 
+
+secret: argus.
+log_path: log.txt
+cmmExe: ControlMyMonitor.exe
+enabled: False

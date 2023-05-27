@@ -4,50 +4,41 @@ import datetime
 import pytz
 from enum import Enum
 import ctypes
+import yaml  # Using pip install pyyaml
 
-version = "1.1"
-featurecomment = "First Working Version"
+version = "1.2"
+featurecomment = "Config update"
 
 # =====================#
-#   Configuration
+#   Script Instructions
 # =====================#
-# Required piece of string to allow commands
-secret = "argus."
-log_filename = "log.txt"                    # path to log file
-cmmExe = "C:\\path\\ControlMyMonitor.exe"   # path to CMM exe
+#
+# Modify config.yaml with for your specs
+#   Run argus.py along with argus test
+#   if the command is showing correctly
+#   update config enabled=True
+
+
 local_ip = socket.gethostbyname(socket.gethostname())
+enabled = False
 
 
 class log:
-    def info(message):
+    def info(message, level='INFO'):
         timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-        log_message = f"[INFO] {timestamp} - {message}"
+        log_message = f"[{level}] {timestamp} - {message}"
         print(log_message)
         try:
-            with open(log_filename, 'a') as log_file:
+            with open(log_path, 'a') as log_file:
                 log_file.write(log_message + "\n")
         except IOError as e:
             print(f'File error: {e}')
 
     def debug(message):
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-        log_message = f"[DEBUG] {timestamp} - {message}"
-        print(log_message)
-        try:
-            with open(log_filename, 'a') as log_file:
-                log_file.write(log_message + "\n")
-        except IOError as e:
-            print(f'File error: {e}')
+        log.info(message, level='DEBUG')
 
     def warn(message):
-        timestamp = datetime.datetime.now().strftime("%Y-%m-%d %I:%M:%S %p")
-        log_message = f"[WARNING] {timestamp} - {message}"
-        print(log_message)
-        try:
-            with open(log_filename, 'a') as log_file:
-                log_file.write(log_message + "\n")
-        except IOError as e:
-            print(f'File error: {e}')
+        log.info(message, level='WARNING')
 
 
 class Monitor():
@@ -83,6 +74,7 @@ class Monitor():
     input_dict = {
         'dp': INPUT.DP.value,
         'displayport': INPUT.DP.value,
+        'hdmi': INPUT.HDMI1.value,
         'hdmi1': INPUT.HDMI1.value,
         'hdmi2': INPUT.HDMI2.value,
         'usbc': INPUT.USBC.value
@@ -90,7 +82,7 @@ class Monitor():
     # Get control command string
 
     def control(monitor, vcp_code, param):
-        return f'{cmmExe} /SetValue {monitor} {vcp_code} {param}"'
+        return f'{cmmExe} /SetValue {monitor} {vcp_code} {param}'
 
 
 class Windows():
@@ -175,18 +167,37 @@ def listen_loop(sock):
             if (command):
                 try:
                     log.info(f'Running command: {command}')
-                    # out = subprocess.run(command)
-                    # if (out.returncode != 0):
-                    #     log.warn(f'{out}')
+                    if enabled:
+                        out = subprocess.run(command)
+                        if (out.returncode != 0):
+                            log.warn(f'{out}')
                 except Exception as e:
                     log.warn(f'Command Error {e}')
 
 
 def main():
+
+    config = None
+    global secret
+    global log_path
+    global cmmExe
+    global enabled
+    
+    # Set up config
+    with open('config.yaml') as config_file:
+        config = yaml.safe_load(config_file)
+
+    secret = config['secret']
+    log_path = config['log_path']
+    cmmExe = config['cmmExe']
+    enabled = config['enabled']
+
     log.info(f'Launching Argus v{version}...')
-    log.debug(f'Latest feature: {featurecomment}')
-    log.info(f'Logging at: {log_filename}')
+    log.info(f'Latest feature: {featurecomment}')
+    log.info(f'Logging at: {log_path}')
     log.info(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')
+    log.info(f'Config: {str(config)}')
+
     sock = setup_reciever_socket()
     # Listen
     listen_loop(sock)
