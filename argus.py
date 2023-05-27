@@ -166,17 +166,14 @@ def listen_loop(sock):
 
             if (command):
                 try:
-                    log.info(f'Running command: {command}')
+                    log.info(f'Running command: {command}' if enabled else 'Running demo: {command}')
                     if enabled:
                         out = subprocess.run(command)
                         if (out.returncode != 0):
                             log.warn(f'{out}')
                 except Exception as e:
                     log.warn(f'Command Error {e}')
-
-
-def main():
-
+def setup_config():
     config = None
     global secret
     global log_path
@@ -197,7 +194,10 @@ def main():
     log.info(f'Logging at: {log_path}')
     log.info(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')
     log.info(f'Config: {str(config)}')
+    return config
 
+def main():
+    config = setup_config()
     sock = setup_reciever_socket()
     # Listen
     listen_loop(sock)

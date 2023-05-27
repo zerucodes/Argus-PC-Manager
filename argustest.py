@@ -11,6 +11,7 @@ sys.path.append(os.getcwd)
 class TestArgus(unittest.TestCase):
     def setUp(self):  # Sender 168, Reciever 169
         self.senderPort = 268  # Test port
+        self.config = argus.setup_config()
         self.sender = argus.setup_sender_socket(self.senderPort)
 
     def test_connection(self):
@@ -19,9 +20,10 @@ class TestArgus(unittest.TestCase):
         argus_ip = argus.local_ip  # '192.168.1.121' remote argus
         result = self.sender.sendto(str.encode(), (argus_ip, 169))
         assertion = self.assertEqual(result, len(str))
-
         if assertion:
-            print(assertion)
+            print(f"[Failed]: {str}: {str(assertion)}")
+        else:
+            print(f"[Passed]: {str}")
 
     def test_change_input(self):
         str = 'argus.monitor 2 input dp'  # Set 2nd monitor input to DisplayPort
@@ -30,7 +32,9 @@ class TestArgus(unittest.TestCase):
         result = self.sender.sendto(str.encode(), (argus_ip, 169))
         assertion = self.assertEqual(result, len(str))
         if assertion:
-            print(assertion)
+            print(f"[Failed]: {str}: {str(assertion)}")
+        else:
+            print(f"[Passed]: {str}")
 
     def test_change_input2(self):
         str = 'argus.monitor 1 input usbc'  # Set 1st monitor input to usbc
@@ -39,7 +43,9 @@ class TestArgus(unittest.TestCase):
         result = self.sender.sendto(str.encode(), (argus_ip, 169))
         assertion = self.assertEqual(result, len(str))
         if assertion:
-            print(assertion)
+            print(f"[Failed]: {str}: {str(assertion)}")
+        else:
+            print(f"[Passed]: {str}")
 
     def tearDown(self):
         print(f'Closing sender socket')
