@@ -141,9 +141,9 @@ def listen_loop(sock):
                 continue
             req = request[1].split(" ")  # monitor 1 input usbc
             req_class = req[0]
-            req_target = str(req[1]) if req_class == "monitor" else None
-            req_command = req[2] if req_class == "monitor" else req[1]
-            req_param = req[3] if req_class == "monitor" else req[2]
+            req_target = str(req[1]) if len(req)> 1 and req_class == "monitor" else None
+            req_command = req[2] if len(req)> 2 and req_class == "monitor" else req[1] if len(req) > 1 else None
+            req_param = req[3] if len(req)> 3 and req_class == "monitor" else req[2] if len(req) > 2 else None
 
             if req_class == "monitor":
                 target_monitor = Monitor.monitor_dict[req_target]
@@ -173,6 +173,9 @@ def listen_loop(sock):
                             log.warn(f'{out}')
                 except Exception as e:
                     log.warn(f'Command Error {e}')
+            else:
+                log.warn(f'Unknown command request!')
+        
 def setup_config():
     config = None
     global secret
