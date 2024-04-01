@@ -1,13 +1,15 @@
 import socket
 import subprocess
 import datetime
-import pytz
 from enum import Enum
 import ctypes
-import yaml  # Using pip install pyyaml
+try:
+    import yaml  # Using pip install pyyaml
+except ImportError:
+    yaml = None
 
-version = "1.2"
-featurecomment = "Config update"
+version = "1.3"
+featurecomment = "Made yaml optional, improved local ip detection"
 
 # =====================#
 #   Script Instructions
@@ -17,11 +19,6 @@ featurecomment = "Config update"
 #   Run argus.py along with argus test
 #   if the command is showing correctly
 #   update config enabled=True
-
-
-local_ip = socket.gethostbyname(socket.gethostname())
-enabled = False
-
 
 class log:
     def info(message, level='INFO'):
@@ -99,9 +96,19 @@ class Windows():
         return None
 
 
+def get_local_ip():
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        s.connect(('10.255.255.255', 1))
+        IP = s.getsockname()[0]
+    except Exception:
+        IP = '192.168.1.100' 
+    finally:
+        s.close()
+    return IP
+
 def setup_sender_socket(port=168):
     try:
-        local_ip = socket.gethostbyname(socket.gethostname())
         log.info(f"Connecting ip {local_ip}:{port}")
         sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         sock.connect((local_ip, port))
@@ -109,9 +116,9 @@ def setup_sender_socket(port=168):
         log.warn(f'Socket error: {e}')
     return sock
 
-
 def setup_reciever_socket(port=169):
     try:
+        local_ip = get_local_ip()
         # IP address and port to listen on
         log.info(f"Connecting ip {local_ip}:{port}")
         # Create a UDP socket
@@ -127,7 +134,6 @@ def setup_reciever_socket(port=169):
         log.warn(f'Socket error: {e}')
     return sock
 
-
 def listen_loop(sock):
     # Listen for incoming UDP packets
     while True:
@@ -141,9 +147,9 @@ def listen_loop(sock):
                 continue
             req = request[1].split(" ")  # monitor 1 input usbc
             req_class = req[0]
-            req_target = str(req[1]) if len(req)> 1 and req_class == "monitor" else None
-            req_command = req[2] if len(req)> 2 and req_class == "monitor" else req[1] if len(req) > 1 else None
-            req_param = req[3] if len(req)> 3 and req_class == "monitor" else req[2] if len(req) > 2 else None
+            req_target = str(req[1]) if req_class == "monitor" else None
+            req_command = req[2] if req_class == "monitor" else req[1]
+            req_param = req[3] if req_class == "monitor" else req[2]
 
             if req_class == "monitor":
                 target_monitor = Monitor.monitor_dict[req_target]
@@ -173,39 +179,53 @@ def listen_loop(sock):
                             log.warn(f'{out}')
                 except Exception as e:
                     log.warn(f'Command Error {e}')
-            else:
-                log.warn(f'Unknown command request!')
-        
+
 def setup_config():
     config = None
     global secret
     global log_path
     global cmmExe
     global enabled
-    
-    # Set up config
-    with open('config.yaml') as config_file:
-        config = yaml.safe_load(config_file)
+    global local_ip
+   
 
+    # Set up config
+    if yaml is not None:
+        try:
+            with open('argus.yaml') as config_file:
+                config = yaml.safe_load(config_file)
+        except FileNotFoundError:
+            config = None
+    
+    # If yaml module isn't available or config file isn't found, assign default values
+    if config is None:
+        config = {
+            "secret": "argus.",
+            "log_path": "argus.log",
+            "cmmExe": "ControlMyMonitor.exxe",
+            "enabled": False
+        }
     secret = config['secret']
     log_path = config['log_path']
     cmmExe = config['cmmExe']
     enabled = config['enabled']
 
+    log.info(f'\n\n')
     log.info(f'Launching Argus v{version}...')
     log.info(f'Latest feature: {featurecomment}')
-    log.info(f'Logging at: {log_path}')
-    log.info(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')
+    log.info(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')    
+
+
+
     log.info(f'Config: {str(config)}')
     return config
 
 def main():
-    config = setup_config()
+    setup_config()
     sock = setup_reciever_socket()
     # Listen
     listen_loop(sock)
     sock.close()
-
 
 if __name__ == '__main__':
     main()

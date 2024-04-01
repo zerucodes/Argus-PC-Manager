@@ -1,6 +1,6 @@
-# User specific 
-
 secret: argus.
-log_path: log.txt
+log_path: log.ztxt
 cmmExe: ControlMyMonitor.exe
 enabled: False
+
+
