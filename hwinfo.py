@@ -35,7 +35,7 @@ def get_cpu_temperature():
             count += 1
     return total/count if count else 0
 
-@DeprecationWarning
+
 def get_ram_temperature():
     w = wmi.WMI(namespace="root\OpenHardwareMonitor")
     temperature_infos = w.Sensor()
@@ -133,6 +133,14 @@ def get_disk_usage():
                 'Used': f"{used_percent:.2f}",
             }
 
+    return disk_usage_dict
+
+def get_disk_usage_simple():
+    disk_usage_dict = {}
+    for drive_letter in range(ord('A'), ord('Z')+1):
+        drive = chr(drive_letter) + ':'
+        if os.path.exists(drive):
+            disk_usage_dict[drive] = shutil.disk_usage(drive)
     return disk_usage_dict
 
 class log:
