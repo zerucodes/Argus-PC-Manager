@@ -3,7 +3,7 @@ import json
 import logging
 import threading
 import time
-from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage
+from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple
 # Setup logging
 logging.basicConfig(level=logging.INFO)
 
@@ -23,12 +23,10 @@ sensors = [
     {"name": "CPU Temperature", "unit_of_measurement": "°C", "state_topic": f"homeassistant/sensor/{device_name}/cpu_temperature/state", "unique_id": f"{device_name}_cpu_temperature", "device_class": "temperature"},
     {"name": "RAM Usage", "unit_of_measurement": "%", "state_topic": f"homeassistant/sensor/{device_name}/ram_usage/state", "unique_id": f"{device_name}_ram_usage", "device_class": "power"},
     {"name": "RAM Temperature", "unit_of_measurement": "°C", "state_topic": f"homeassistant/sensor/{device_name}/ram_temperature/state", "unique_id": f"{device_name}_ram_temperature", "device_class": "temperature"},
-    {"name": "C: free", "unit_of_measurement": "%", "state_topic": f"homeassistant/sensor/{device_name}/c_drive_free/state", "unique_id": f"{device_name}_c_drive_free", "device_class": "disk_usage"},
-    {"name": "C: used", "unit_of_measurement": "MB", "state_topic": f"homeassistant/sensor/{device_name}/c_drive_free/state", "unique_id": f"{device_name}_c_drive_free", "device_class": "disk_usage"},
-    {"name": "E: free", "unit_of_measurement": "%", "state_topic": f"homeassistant/sensor/{device_name}/e_drive_free/state", "unique_id": f"{device_name}_e_drive_free", "device_class": "disk_usage"},
-    {"name": "E: used", "unit_of_measurement": "MB", "state_topic": f"homeassistant/sensor/{device_name}/e_drive_free/state", "unique_id": f"{device_name}_e_drive_free", "device_class": "disk_usage"}
 
 ]
+
+
 lights = [
     {
         "name": "Screen Brightness", 
@@ -37,13 +35,29 @@ lights = [
         "unique_id": f"{device_name}_screen_brightness_control"
     }
 ]
-
+def initialize_drives(drives):
+    for drive_path in drives:
+        drive = drive_path.replace(":","")
+        sensors.append({
+            "name": f"{drive.upper()}: Free",
+            "unit_of_measurement": "B",
+            "state_topic": f"homeassistant/sensor/{device_name}/{drive.lower()}_drive_free/state",
+            "unique_id": f"{device_name}_{drive.lower()}_drive_free",
+            "device_class": "data_size"
+        })
+        sensors.append({
+            "name": f"{drive.upper()}: Total",
+            "unit_of_measurement": "B",
+            "state_topic": f"homeassistant/sensor/{device_name.lower()}/{drive.lower()}_drive_total/state",
+            "unique_id": f"{device_name}_{drive.lower()}_drive_total",
+            "device_class": "data_size"
+        })
 def publish_config():
+    initialize_drives(get_disk_usage_simple())
     for sensor in sensors:
         if "state_topic" in sensor:
             config_topic = f'homeassistant/{sensor["state_topic"].split("/")[1]}/{sensor["unique_id"]}/config'
-        else:
-            config_topic = f'homeassistant/{sensor["command_topic"].split("/")[1]}/{sensor["unique_id"]}/config'
+ 
         config_payload = sensor.copy()
         config_payload["device"] = device_config
         logging.debug(f"Publishing config to {config_topic}: {json.dumps(config_payload)}")
@@ -64,13 +78,44 @@ def publish_config():
         client.publish(config_topic, json.dumps(config_payload), retain=True)
 
 
-def publish_sensor_data(temperature, usage):
+def publish_diskspace_data():
+    disks = get_disk_usage_simple()
+    for disk in disks:
+        drive = disk.replace(":","")
+        free_topic = f"homeassistant/sensor/{device_name}/{drive.lower()}_drive_free/state"
+        free_value = disks[disk].free
+        total_topic = f"homeassistant/sensor/{device_name}/{drive.lower()}_drive_total/state"
+        total_value = disks[disk].total
+        logging.debug(f"Publishing temperature to {free_topic}: {free_value}")
+        logging.debug(f"Publishing usage to {total_topic}: {total_value}")
+        client.publish(free_topic,free_value)
+        client.publish(total_topic,total_value)
+
+def publish_sensor_data():
     cpu_temp_topic = f"homeassistant/sensor/{device_name}/cpu_temperature/state"
     cpu_usage_topic = f"homeassistant/sensor/{device_name}/cpu_usage/state"
-    logging.debug(f"Publishing temperature to {cpu_temp_topic}: {temperature}")
-    logging.debug(f"Publishing usage to {cpu_usage_topic}: {usage}")
-    client.publish(cpu_temp_topic, get_cpu_temperature())
-    client.publish(cpu_usage_topic, get_cpu_load())
+
+    ram_temp_topic = f"homeassistant/sensor/{device_name}/ram_temperature/state"
+    ram_usage_topic = f"homeassistant/sensor/{device_name}/ram_usage/state"
+
+    cpu_temp = get_cpu_temperature()
+    cpu_load = get_cpu_load()
+
+    ram_temp = get_ram_temperature()
+    ram_load = get_ram_usage()
+
+    logging.debug(f"Publishing temperature to {cpu_temp_topic}: {cpu_temp}")
+    logging.debug(f"Publishing usage to {cpu_usage_topic}: {cpu_load}")
+
+    logging.debug(f"Publishing temperature to {ram_temp_topic}: {ram_temp}")
+    logging.debug(f"Publishing usage to {ram_usage_topic}: {ram_load}")
+    client.publish(cpu_temp_topic, cpu_temp)
+    client.publish(cpu_usage_topic, cpu_load)
+
+    client.publish(ram_temp_topic, ram_temp)
+    client.publish(ram_usage_topic, ram_load)
+
+
 
 def publish_light_state(brightness):
     switch_topic = f"homeassistant/light/{device_name}/screen_brightness/state"
@@ -124,7 +169,10 @@ threading.Thread(target=client.loop_forever, daemon=True).start()
 counter  = 0
 while True:
     if counter % 15 == 0:
-        publish_sensor_data(21, 58)
-    publish_light_state(brightness)
-    time.sleep(2)
+        publish_sensor_data()
+    if counter % 1000 == 0:
+        publish_diskspace_data()
+    if  counter % 5 == 0:
+        publish_light_state(brightness)
+    time.sleep(1)
     counter+=1
