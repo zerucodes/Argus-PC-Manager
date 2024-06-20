@@ -1,6 +1,7 @@
 import socket
 import subprocess
 import datetime
+import os
 from enum import Enum
 import ctypes
 try:
@@ -59,8 +60,9 @@ class Monitor():
     monitor_dict = {
         '1': 'Primary',
         '2': 'Secondary',
-        'm27q': DEVICE.M27Q,
-        'u2722de': DEVICE.U2722DE
+        '3':  DEVICE.M27Q.value,
+        'm27q': DEVICE.M27Q.value,
+        'u2722de': DEVICE.U2722DE.value
     }
     vcp_dict = {
         'input': VCPCode.INPUT.value,
@@ -79,7 +81,7 @@ class Monitor():
     # Get control command string
 
     def control(monitor, vcp_code, param):
-        return f'{cmmExe} /SetValue {monitor} {vcp_code} {param}'
+        return f'{cmmExe} /SetValueIfNeeded  {monitor} {vcp_code} {param}'
 
 
 class Windows():
@@ -174,9 +176,10 @@ def listen_loop(sock):
                 try:
                     log.info(f'Running command: {command}' if enabled else 'Running demo: {command}')
                     if enabled:
-                        out = subprocess.run(command)
+                        out = subprocess.run(command,cwd=os.path.dirname(command.split()[0]), capture_output=True)
                         if (out.returncode != 0):
                             log.warn(f'{out}')
+                        log.info(f'{out}')
                 except Exception as e:
                     log.warn(f'Command Error {e}')
 
@@ -195,14 +198,19 @@ def setup_config():
             with open('argus.yaml') as config_file:
                 config = yaml.safe_load(config_file)
         except FileNotFoundError:
-            config = None
+            try:
+                with open(r'C:\Argus\argus.yaml') as config_file:
+                    config = yaml.safe_load(config_file)
+            except FileNotFoundError:
+                config = None
+            
     
     # If yaml module isn't available or config file isn't found, assign default values
     if config is None:
         config = {
             "secret": "argus.",
-            "log_path": "argus.log",
-            "cmmExe": "ControlMyMonitor.exxe",
+            "log_path": r"C:\Logs\argus.log",
+            "cmmExe": "ControlMyMonitor.exe",
             "enabled": False
         }
     secret = config['secret']
@@ -214,9 +222,6 @@ def setup_config():
     log.info(f'Launching Argus v{version}...')
     log.info(f'Latest feature: {featurecomment}')
     log.info(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')    
-
-
-
     log.info(f'Config: {str(config)}')
     return config
 
