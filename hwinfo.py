@@ -200,10 +200,21 @@ def get_battery_level(friendly_name):
 
     if result.returncode != 0:
         raise Exception(f"Error executing PowerShell: {result.stderr}")
+    r = result.stdout.strip()
+    try:
+        return int(r)
+    except  Exception as e:
+        return -1
 
-    return result.stdout.strip()
 
-
+def get_hw_attr(attr):
+    try:
+        c = wmi.WMI()
+        v = c.Win32_ComputerSystem()[0]
+        return getattr(v,attr)
+    except Exception as e:
+        print(e)
+        
 # Test
 def get_bt_info():
     devices = ['G915 Keyboard', 'MX Master 3']
