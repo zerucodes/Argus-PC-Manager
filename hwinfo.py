@@ -8,7 +8,7 @@ import wmi
 import time
 import datetime
 import subprocess
-
+import  psutil
 def get_size(bytes, suffix="B"):
     factor = 1024
     for unit in ["", "K", "M", "G", "T", "P"]:
@@ -30,7 +30,7 @@ def get_cpu_temperature():
     count = 0
     for sensor in temperature_infos:
         if sensor.SensorType == 'Temperature' and 'CPU' in sensor.Name:
-            print(sensor.Name, sensor.Value)
+            # print(sensor.Name, sensor.Value)
             total += sensor.Value
             count += 1
     return total/count if count else 0
@@ -43,16 +43,16 @@ def get_ram_temperature():
     count = 0
     for sensor in temperature_infos:
         if sensor.SensorType == 'Temperature' and 'Generic Memory' in sensor.Name:
-            print(sensor.Name, sensor.Value)
+            # print(sensor.Name, sensor.Value)
             total += sensor.Value
             count += 1
     if not count:
         for sensor in temperature_infos:
             if sensor.SensorType == 'Temperature' and 'Memory' in sensor.Name:
-                print(sensor.Name, sensor.Value)
+                # print(sensor.Name, sensor.Value)
                 total += sensor.Value
                 count += 1
-    return total/count if count else 0
+    return total/count if count!=0 else None
 
 def get_ram_usage():
     w = wmi.WMI(namespace="root\OpenHardwareMonitor")
@@ -61,13 +61,13 @@ def get_ram_usage():
     count = 0
     for sensor in temperature_infos:
         if sensor.SensorType == 'Load' and 'Generic Memory' == sensor.Name:
-            print(sensor.Name, sensor.Value)
+            # print(sensor.Name, sensor.Value)
             total += sensor.Value
             count += 1
     if not count:
         for sensor in temperature_infos:
             if sensor.SensorType == 'Load' and 'Memory' == sensor.Name:
-                print(sensor.Name, sensor.Value)
+                # print(sensor.Name, sensor.Value)
                 total += sensor.Value
                 count += 1
     return total/count if count else 0
@@ -82,7 +82,7 @@ def get_cpu_load():
         load_infos = w.Sensor()
         for sensor in load_infos:
             if sensor.SensorType == 'Load' and 'CPU Total' in sensor.Name:
-                print(sensor.Name, sensor.Value)
+                # print(sensor.Name, sensor.Value)
                 total += sensor.Value
                 count += 1
         time.sleep(.5)  # Sleep for 1 second
@@ -206,7 +206,38 @@ def get_battery_level(friendly_name):
     except  Exception as e:
         return -1
 
+def get_bluetooth_battery():
+    bt_command = '''
+    $bl = Get-PnpDevice -FriendlyName "*"  -Class Bluetooth
+        $bl | ForEach-Object {
+            $battery = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2"  | Where-Object Type -ne 'Empty' 
+            if ($battery.Data) {
+                Write-Host "$($_.FriendlyName),,,$($battery.Data)"
+            }
+        }
+    '''
+    result = subprocess.run(
+        ["powershell", "-Command", bt_command],
+        capture_output=True,
+        text=True
+    )
+    if result.returncode != 0:
+        raise Exception(f"Error executing PowerShell: {result.stderr}")
+    r = result.stdout.strip()
+    try:
+        batteries = {}
+        for line in r.split("\n"):
+            batteries[line.split(",,,")[0]] = int(line.split(",,,")[1])
+        return batteries
+    except  Exception as e:
+        return {}
+    
+def get_last_boot():
 
+    boot_time_timestamp = psutil.boot_time()
+    boot_time = datetime.datetime.fromtimestamp(boot_time_timestamp)
+    return boot_time
+    
 def get_hw_attr(attr):
     try:
         c = wmi.WMI()
@@ -225,7 +256,7 @@ def get_bt_info():
             battery_level[device.replace(' ','_')] = battery
 
     json_dump = json.dumps(battery_level, indent=4)
-    url = 'https://arguszeru.duckdns.org/api/webhook/arguspc.battery_level'
+    url = 'https://HASSURL.duckdns.org/api/webhook/arguspc.battery_level'
     log.info(json_dump)
     response = requests.post(url, data=json_dump, headers={
                             'Content-Type': 'application/json'})
