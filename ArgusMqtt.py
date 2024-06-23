@@ -293,7 +293,7 @@ def main():
     monitor1.publish_sensor("ON",'HDMI-1')
 
     log.info(f'Initializing PC Device')
-    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),mac='58:47:ca:72:46:a0',client=client)
+    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),client=client)
     initialize_pc_sensors(pc)
     pc.publish_sensor_topics()
 

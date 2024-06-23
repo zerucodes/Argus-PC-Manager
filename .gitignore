@@ -1,0 +1,10 @@
+# # # Ignore Rules # # #
+
+# Visual Studio auto generated
+.vs
+Debug
+*proj.*
+*.obj
+
+# Python Debugging
+__pycache__
