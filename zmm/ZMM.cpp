@@ -11,20 +11,10 @@
 
 #pragma comment(lib, "Dxva2.lib")
 
-// Define the necessary structures and constants for VCP codes
-#define IOCTL_VIDEO_QUERY_SUPPORTED_BRIGHTNESS    CTL_CODE(FILE_DEVICE_VIDEO, 0x126, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_QUERY_DISPLAY_BRIGHTNESS      CTL_CODE(FILE_DEVICE_VIDEO, 0x127, METHOD_BUFFERED, FILE_ANY_ACCESS)
-#define IOCTL_VIDEO_SET_DISPLAY_BRIGHTNESS        CTL_CODE(FILE_DEVICE_VIDEO, 0x128, METHOD_BUFFERED, FILE_ANY_ACCESS)
-
-typedef struct _DISPLAY_BRIGHTNESS {
-    UCHAR ucDisplayPolicy;
-    UCHAR ucACBrightness;
-    UCHAR ucDCBrightness;
-} DISPLAY_BRIGHTNESS, * PDISPLAY_BRIGHTNESS;
-
 struct CommandLineOptions {
     bool getMonitors = false;
     bool setVCP = false;
+    bool getVCP = false;
     BYTE vcpCode = 0x0;
     DWORD value = 0;
     int monitorIndex = -1;
@@ -39,15 +29,25 @@ bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWO
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     auto physicalMonitors = reinterpret_cast<std::vector<PHYSICAL_MONITOR>*>(dwData);
     int deviceIndex = static_cast<int>(physicalMonitors->size());
-    // std::wcout << L"Monitor #" << deviceIndex << L", Monitor Name: ";
 
     if (!GetPhysicalMonitorsInfo(hMonitor, *physicalMonitors, deviceIndex)) {
         std::cerr << "Failed to retrieve physical monitor information." << std::endl;
         return FALSE;
     }
-
-    // std::wcout << physicalMonitors->back().szPhysicalMonitorDescription << std::endl;
     return TRUE;
+}
+
+std::wstring GetMonitorName(HMONITOR hMonitor) {
+    MONITORINFOEX monitorInfo;
+    monitorInfo.cbSize = sizeof(MONITORINFOEX);
+    if (GetMonitorInfo(hMonitor, &monitorInfo)) {
+        DISPLAY_DEVICE displayDevice;
+        displayDevice.cb = sizeof(DISPLAY_DEVICE);
+        if (EnumDisplayDevices(monitorInfo.szDevice, 0, &displayDevice, 0)) {
+            return displayDevice.DeviceString;
+        }
+    }
+    return L"Unknown";
 }
 
 int main(int argc, char* argv[]) {
@@ -64,39 +64,46 @@ int main(int argc, char* argv[]) {
     }
 
     if (options.getMonitors) {
+        std::wcout << "{\"monitors\":[";
         for (size_t i = 0; i < physicalMonitors.size(); ++i) {
-            std::wcout << L"Monitor #" << i << L", Name: " << physicalMonitors[i].szPhysicalMonitorDescription << std::endl;
+            //std::wcout << L"{'Monitors':[ " << i << L", Name: " << physicalMonitors[i].szPhysicalMonitorDescription << std::endl;
+            std::wcout << "\"" << physicalMonitors[i].szPhysicalMonitorDescription << "\"";
+            if (i != physicalMonitors.size() - 1) {
+                std::wcout << ", ";
+            }
         }
+        std::wcout << "]}";
     }
-    else if (options.setVCP) {
-        HANDLE targetMonitor = nullptr;
+    else if (options.getVCP || options.setVCP) {
+        PHYSICAL_MONITOR zMonitor = { 0 };
+
         if (options.monitorIndex != -1 && options.monitorIndex < static_cast<int>(physicalMonitors.size())) {
-            targetMonitor = physicalMonitors[options.monitorIndex].hPhysicalMonitor;
-            std::wstring monitorDescription(physicalMonitors[options.monitorIndex].szPhysicalMonitorDescription);
-            std::wcout << "Chaning Setting for " << monitorDescription << std::endl;
+            zMonitor = physicalMonitors[options.monitorIndex];
         }
         else {
             std::wstring wMonitorName(options.monitorName.begin(), options.monitorName.end());
             for (const auto& monitor : physicalMonitors) {
                 std::wstring monitorDescription(monitor.szPhysicalMonitorDescription);
-
                 if (monitorDescription.find(wMonitorName) != std::wstring::npos) {
-                    targetMonitor = monitor.hPhysicalMonitor;
-                    std::wcout << "Chaning Setting for " << monitorDescription << std::endl;
+                    zMonitor = monitor;
                     break;
                 }
             }
         }
+        DWORD newValue, maxValue;
 
-        DWORD previousValue, maxValue;
-        ReadVCPCode(targetMonitor, options.vcpCode  , previousValue, maxValue);
+        if (options.setVCP) {
+            if (WriteVCPCode(zMonitor.hPhysicalMonitor, options.vcpCode, options.value)) {
+                //std::cout << "VCP code " << (int)options.vcpCode << " from " << newValue << " set to " << options.value << " (max " << maxValue << ")" << std::endl;
+            }
+            else {
+                std::cerr << "Failed to set VCP code." << std::endl;
+            }
+        }
+        std::wstring monitorName(zMonitor.szPhysicalMonitorDescription);
+        ReadVCPCode(zMonitor.hPhysicalMonitor, options.vcpCode, newValue, maxValue);
 
-        if (WriteVCPCode(targetMonitor, options.vcpCode , options.value)) {
-            std::cout << "VCP code " << (int)options.vcpCode << " from " << previousValue  << " set to " << options.value << " (max " << maxValue << ")" << std::endl;
-        }
-        else {
-            std::cerr << "Failed to set VCP code." << std::endl;
-        }
+        std::wcout << "{\"response\":{\"monitor\":\"" << monitorName << "\",\"vcp\":" <<  int(options.vcpCode) << ",\"value\":" << newValue << "}}";
     }
 
     for (const auto& monitor : physicalMonitors) {
@@ -123,6 +130,9 @@ bool ParseCommandLine(int argc, char* argv[], CommandLineOptions& options) {
         std::string arg = argv[i];
         if (arg == "-getMonitors") {
             options.getMonitors = true;
+        }
+        else if (arg == "-getVCP") {
+            options.getVCP = true;
         }
         else if (arg == "-setVCP") {
             options.setVCP = true;
@@ -166,12 +176,6 @@ bool GetPhysicalMonitorsInfo(HMONITOR hMonitor, std::vector<PHYSICAL_MONITOR>& p
     return true;
 }
 
-std::string intToHex(int value) {
-    std::ostringstream oss;
-    oss << "0x" << std::hex << std::uppercase << value;
-    return oss.str();
-}
-
 bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWORD& maxValue) {
     MC_VCP_CODE_TYPE type;
     DWORD current, maximum;
@@ -187,7 +191,6 @@ bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWO
 }
 
 bool WriteVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD newValue) {
-    
     if (SetVCPFeature(hPhysicalMonitor, vcpCode, newValue)) {
         return true;
     }
