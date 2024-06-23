@@ -12,7 +12,6 @@ from datetime import datetime
 
 def setup_config():
     config = None
-
     version = '0.1.0'
     featurecomment = 'Initial Revision'
     log.basicConfig(level=log.INFO)
@@ -33,7 +32,6 @@ def setup_config():
                 log.error(f'No config available')
                 config = None
 
-    
     # If yaml module isn't available or config file isn't found, assign default values
     if config is None:
         log.debug(f'Using default config in demo mode')
@@ -61,16 +59,18 @@ class DeviceClass(Enum):
     BUTTON = 'button'
 class Device:
 
-    def __init__(self, name, model=None,manufacturer=None,client=None):
+    def __init__(self, name, model=None,manufacturer=None,mac=None,client=None):
         self.name = name    
         self.model = model
         self.manufacturer = manufacturer
         self.device_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) # self.name.lower().replace(' ','_').replace('-','_')
         self.identifiers = [f'{self.device_name}_zmqtt_identifier']
+        self.mac = mac
         self.set_config()
         self.sensor_topics = {}
         self.command_topics = {}
         self.client = client
+        
     def set_config(self):
         config =  {
             "name" : self.name,
@@ -80,6 +80,8 @@ class Device:
             config["manufacturer"] = self.manufacturer
         if self.model:
             config["model"] = self.model
+        if self.mac:
+            config['connections'] = [['mac',self.mac]]
         self.config = config
     
     def generate_sensor_topic(self,device_class,name=None,message=None):
@@ -94,19 +96,19 @@ class Device:
                 log.debug('TBD')
             case DeviceClass.DATA_SIZE:
                 if name:
-                    # "C:"
+                    sensor['entity_category'] = 'diagnostic'
                     sensor['unit_of_measurement'] = 'B'
             case DeviceClass.POWER:
                 sensor['name'] = f'{name} Usage'
                 sensor['unit_of_measurement'] = '%'
+                del sensor['device_class']
             case DeviceClass.TEMPERATURE:
                 sensor['name'] = f'{name} Temperature'
                 sensor['unit_of_measurement'] = '°C'
             case DeviceClass.TIMESTAMP:
-                # sensor['unit_of_measurement'] = 'date_time'
+                sensor['entity_category'] = 'diagnostic'
                 sensor['value_template']  = '{{ value | int | timestamp_local | as_datetime  }}'
-                # sensor['device_class']  =  None # 'timestamp'
-                # del  sensor['device_class']
+
 
 
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower()) #  battery_level
@@ -147,6 +149,8 @@ class Device:
         sensor['state_topic'] = f'homeassistant/sensor/{self.device_name}/{sensor_name}/state'
         sensor['unique_id'] = f"{self.device_name}_{sensor_name}"  #  zeru_pc_battery_level
         sensor['device'] = self.config
+
+
         del sensor['device_class']
 
         if sensor_name not in self.command_topics:
@@ -263,11 +267,9 @@ def on_message(client, userdata, message):
 
 def main():
     config = setup_config()
-
     broker =  config['mqtt_ip']
     port = 1883
     client = mqtt.Client()
-
     # Set MQTT username and password if required
     client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
     client.connect(broker, port)
@@ -279,20 +281,19 @@ def main():
     monitor1 = Device(name='M27Q',model='M27Q',manufacturer='Gigabyte',client=client) 
     # monitor2 = Device(name='U2722DE',model='U2722DE',manufacturer='Dell',client=client) 
     monitor1.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness')
-    
-    payload = {"state":'ON','brightness':77}
-    monitor1.publish_sensor(name='Screen Brightness',value=json.dumps(payload))
+    monitor1.publish_sensor(name='Screen Brightness',value=json.dumps({"state":'ON','brightness':77}))
+
     monitor1.generate_command_topic(DeviceClass.BUTTON,name='USB-C')
-    #  monitor1.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1')
-    #  monitor1.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort')
+    monitor1.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1')
+    monitor1.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort')
     
     
     monitor1.publish_command_topics()
     monitor1.publish_sensor("ON",'USB-C')
-
+    monitor1.publish_sensor("ON",'HDMI-1')
 
     log.info(f'Initializing PC Device')
-    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),client=client)
+    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),mac='58:47:ca:72:46:a0',client=client)
     initialize_pc_sensors(pc)
     pc.publish_sensor_topics()
 
