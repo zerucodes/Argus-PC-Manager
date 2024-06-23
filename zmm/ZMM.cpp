@@ -25,7 +25,7 @@ typedef struct _DISPLAY_BRIGHTNESS {
 struct CommandLineOptions {
     bool getMonitors = false;
     bool setVCP = false;
-    int vcpCode = 0;
+    BYTE vcpCode = 0x0;
     DWORD value = 0;
     int monitorIndex = -1;
     std::string monitorName;
@@ -33,9 +33,8 @@ struct CommandLineOptions {
 
 bool ParseCommandLine(int argc, char* argv[], CommandLineOptions& options);
 bool GetPhysicalMonitorsInfo(HMONITOR hMonitor, std::vector<PHYSICAL_MONITOR>& physicalMonitors, int& deviceIndex);
-bool ReadBrightness(HANDLE hPhysicalMonitor, DWORD& currentValue, DWORD& maxValue);
-bool SetBrightness(HANDLE hPhysicalMonitor, DWORD newValue);
 bool WriteVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD newValue);
+bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWORD& maxValue);
 
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     auto physicalMonitors = reinterpret_cast<std::vector<PHYSICAL_MONITOR>*>(dwData);
@@ -73,6 +72,8 @@ int main(int argc, char* argv[]) {
         HANDLE targetMonitor = nullptr;
         if (options.monitorIndex != -1 && options.monitorIndex < static_cast<int>(physicalMonitors.size())) {
             targetMonitor = physicalMonitors[options.monitorIndex].hPhysicalMonitor;
+            std::wstring monitorDescription(physicalMonitors[options.monitorIndex].szPhysicalMonitorDescription);
+            std::wcout << "Chaning Setting for " << monitorDescription << std::endl;
         }
         else {
             std::wstring wMonitorName(options.monitorName.begin(), options.monitorName.end());
@@ -86,8 +87,12 @@ int main(int argc, char* argv[]) {
                 }
             }
         }
-        if (WriteVCPCode(targetMonitor, static_cast<BYTE>(options.vcpCode), options.value)) {
-            std::cout << "VCP code 0x" << options.vcpCode << " set to " << options.value << std::endl;
+
+        DWORD previousValue, maxValue;
+        ReadVCPCode(targetMonitor, options.vcpCode  , previousValue, maxValue);
+
+        if (WriteVCPCode(targetMonitor, options.vcpCode , options.value)) {
+            std::cout << "VCP code " << (int)options.vcpCode << " from " << previousValue  << " set to " << options.value << " (max " << maxValue << ")" << std::endl;
         }
         else {
             std::cerr << "Failed to set VCP code." << std::endl;
@@ -101,6 +106,18 @@ int main(int argc, char* argv[]) {
     return 0;
 }
 
+BYTE parseValue(const std::string& value) {
+    int base = 10;
+    if (value.substr(0, 2) == "0x") {
+        base = 16;
+    }
+    int intValue = std::stoi(value, nullptr, base);
+    if (intValue < 0 || intValue > 255) {
+        throw std::out_of_range("Value out of range for BYTE");
+    }
+    return static_cast<BYTE>(intValue);
+}
+
 bool ParseCommandLine(int argc, char* argv[], CommandLineOptions& options) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -111,7 +128,7 @@ bool ParseCommandLine(int argc, char* argv[], CommandLineOptions& options) {
             options.setVCP = true;
         }
         else if (arg.find("--vcp=") == 0) {
-            options.vcpCode = std::stoi(arg.substr(6));
+            options.vcpCode = parseValue(arg.substr(6));
         }
         else if (arg.find("--value=") == 0) {
             options.value = std::stoi(arg.substr(8));
@@ -149,28 +166,28 @@ bool GetPhysicalMonitorsInfo(HMONITOR hMonitor, std::vector<PHYSICAL_MONITOR>& p
     return true;
 }
 
-bool ReadBrightness(HANDLE hPhysicalMonitor, DWORD& currentValue, DWORD& maxValue) {
-    DISPLAY_BRIGHTNESS brightness;
-    DWORD bytesReturned;
-
-    if (DeviceIoControl(hPhysicalMonitor, IOCTL_VIDEO_QUERY_DISPLAY_BRIGHTNESS, NULL, 0, &brightness, sizeof(brightness), &bytesReturned, NULL)) {
-        currentValue = brightness.ucACBrightness;
-        maxValue = 100; // Typically, brightness is represented as a percentage from 0 to 100
-        return true;
-    }
-    else {
-        std::cerr << "Failed to get brightness." << std::endl;
-        return false;
-    }
-}
-
 std::string intToHex(int value) {
     std::ostringstream oss;
     oss << "0x" << std::hex << std::uppercase << value;
     return oss.str();
 }
 
+bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWORD& maxValue) {
+    MC_VCP_CODE_TYPE type;
+    DWORD current, maximum;
+    if (GetVCPFeatureAndVCPFeatureReply(hPhysicalMonitor, vcpCode, &type, &current, &maximum)) {
+        currentValue = current;
+        maxValue = maximum;
+        return true;
+    }
+    else {
+        std::cerr << "Failed to get VCP code 0x" << std::hex << (int)vcpCode << std::dec << std::endl;
+        return false;
+    }
+}
+
 bool WriteVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD newValue) {
+    
     if (SetVCPFeature(hPhysicalMonitor, vcpCode, newValue)) {
         return true;
     }
