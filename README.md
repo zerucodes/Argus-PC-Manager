@@ -21,6 +21,9 @@ application that will detect Sensors, battery powered BL devices, and publish th
 the need to manually configure HASS automations and config.yaml template sensors.  
 
 > Device created entirely by default ArgusMqtt.py configuration
+
+![image](https://github.com/zerucodes/Argus-PC-Manager/assets/123906605/f4af8120-b8ff-4c98-9c2b-71a90798a359)
+
 ![image](https://github.com/zerucodes/argus/assets/123906605/797784cd-d097-4d12-8273-43c7c7cf91a2)
 
 
