@@ -1,5 +1,6 @@
-# argus
-Local network communication. Use to send commands to a local server (nicknamed Argus) and have custom control over the machine. Currently supporting monitor control and machine power state control. 
+# Argus - Home Assistant Companion
+
+Campanion application for Home Assistant (https://www.home-assistant.io/) Computer and Display Monitor control
 
 V1.0:
 Initial release
@@ -7,6 +8,34 @@ V1.1:
 Working release with unit test
 V1.2:
 Config file, fixed bugs
+V2.0:
+Custom CPP Monitor Controller, MQTT Hass Support
+
+(NEW Method)
+Version 2.0 aims to remove as much user configuration as possible, support getting/setting monitor information with a built in cpp windows application
+This will support automatically detecting monitors as well as controlling by monitor name (see image below)
+
+MQTT Support:
+Both argus.py (HASS http server for monitor control inputs) and hwinfo.py (pc sensor reader) are combined into a unified MQTT Python
+application that will detect Sensors, battery powered BL devices, and publish them to a HASS server as custom devices! This removes
+the need to manually configure HASS automations and config.yaml template sensors.  
+
+> Device created entirely by default ArgusMqtt.py configuration
+![image](https://github.com/zerucodes/argus/assets/123906605/797784cd-d097-4d12-8273-43c7c7cf91a2)
+
+
+New Custom Monitor Control:
+
+> .\ZMM.exe -getMonitors
+
+> .\ZMM.exe -setVCP --vcp=0x10 --value=75 --monitor=0
+
+> .\ZMM.exe -setVCP --vcp=0x10 --value=85 --monitor=DP
+
+> .\ZMM.exe -setVCP --vcp=16 --value=85 --monitor=U2722DE
+
+![image](https://github.com/zerucodes/argus/assets/123906605/eb4f2418-e723-4b94-b394-4f502a086a83)
+
 
 Required Components:
 1. ControlMyMonitor.exe Available: https://www.nirsoft.net/utils/control_my_monitor.html
