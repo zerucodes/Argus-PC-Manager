@@ -9,13 +9,13 @@ import threading
 import json 
 import time
 from datetime import datetime
-
+import subprocess
+import os
 def setup_config():
     config = None
     version = '0.1.0'
     featurecomment = 'Initial Revision'
-    log.basicConfig(level=log.INFO)
-
+    log.basicConfig(level=log.DEBUG, format='%(asctime)s [%(levelname)s] %(funcName)s: %(message)s')    
     log.debug('Looking for config')
     # Set up config
     if yaml is not None:
@@ -264,6 +264,33 @@ def on_message(client, userdata, message):
             value = 0
         log.debug(f"Received command to set screen brightness to {value}")
 
+def runCommand(command,enabled=False):
+    if (command):
+        try:
+            log.debug(f'Running command: {command}' if enabled else 'Running demo: {command}')
+            if enabled:
+                out = subprocess.run(command,capture_output=True)
+                if (out.returncode != 0):
+                    log.warning(f'{out}')
+                log.debug(f'{out}')
+                return json.loads(out.stdout.decode())
+        except Exception as e:
+            log.warning(f'Command Error {e}')
+
+
+def getMonitors(client):
+    monitors = []
+    monitor_names = runCommand("VCPController.exe -getMonitors",enabled=True)['monitors']
+    for name in monitor_names:
+        monitor = Device(name=name,client=client)
+        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness')
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C')
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1')
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2')
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort')
+        # monitor.publish_command_topics()
+        monitors.append(monitor)
+    return monitors
 
 def main():
     config = setup_config()
@@ -278,26 +305,19 @@ def main():
     client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
     client.on_message = on_message
     
-    monitor1 = Device(name='M27Q',model='M27Q',manufacturer='Gigabyte',client=client) 
-    # monitor2 = Device(name='U2722DE',model='U2722DE',manufacturer='Dell',client=client) 
-    monitor1.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness')
-    monitor1.publish_sensor(name='Screen Brightness',value=json.dumps({"state":'ON','brightness':77}))
-
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='USB-C')
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1')
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort')
-    
-    
-    monitor1.publish_command_topics()
-    monitor1.publish_sensor("ON",'USB-C')
-    monitor1.publish_sensor("ON",'HDMI-1')
+    managed_devices = []
 
     log.info(f'Initializing PC Device')
     pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),client=client)
-    initialize_pc_sensors(pc)
-    pc.publish_sensor_topics()
-
+    managed_devices.append(pc)
+    monitors = getMonitors(client=client)
+    managed_devices.extend(monitors)
     
+    initialize_pc_sensors(pc)
+    for device in managed_devices:
+        device.publish_command_topics()
+        device.publish_sensor_topics()
+
 
     threading.Thread(target=client.loop_forever, daemon=True).start()    
     log.info(f'Sending Sensor data on loop...')
