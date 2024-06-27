@@ -6,9 +6,10 @@
 #include <iostream>
 #include <sstream>
 #include <iomanip>
+#include <map>
 #include <HighLevelMonitorConfigurationAPI.h>
 #include <LowLevelMonitorConfigurationAPI.h>
-
+#include <unordered_map>
 #pragma comment(lib, "Dxva2.lib")
 
 struct CommandLineOptions {
@@ -25,6 +26,7 @@ bool ParseCommandLine(int argc, char* argv[], CommandLineOptions& options);
 bool GetPhysicalMonitorsInfo(HMONITOR hMonitor, std::vector<PHYSICAL_MONITOR>& physicalMonitors, int& deviceIndex);
 bool WriteVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD newValue);
 bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWORD& maxValue);
+std::unordered_map<std::string, std::string> GetMonitorCapabilities(HANDLE hMonitor);
 
 BOOL CALLBACK MonitorEnumProc(HMONITOR hMonitor, HDC hdcMonitor, LPRECT lprcMonitor, LPARAM dwData) {
     auto physicalMonitors = reinterpret_cast<std::vector<PHYSICAL_MONITOR>*>(dwData);
@@ -64,10 +66,17 @@ int main(int argc, char* argv[]) {
     }
 
     if (options.getMonitors) {
-        std::wcout << "{\"monitors\":[";
+        std::wcout << "{\"monitors\":[" ;
         for (size_t i = 0; i < physicalMonitors.size(); ++i) {
             //std::wcout << L"{'Monitors':[ " << i << L", Name: " << physicalMonitors[i].szPhysicalMonitorDescription << std::endl;
-            std::wcout << "\"" << physicalMonitors[i].szPhysicalMonitorDescription << "\"";
+            auto capabilities = GetMonitorCapabilities(physicalMonitors[i].hPhysicalMonitor);
+            //for (auto it = capabilities.begin(); it != capabilities.end(); ++it) {
+            //    std::cout << it->first << " " << it->second << std::endl;
+            //}
+
+            std::cout << "{\"model\":\"" << capabilities["model"] << "\"" << ",\"name\":\"";
+            std::wcout << physicalMonitors[i].szPhysicalMonitorDescription << "\"}";
+            //std::wcout << "\"" << physicalMonitors[i].szPhysicalMonitorDescription << "\"";
             if (i != physicalMonitors.size() - 1) {
                 std::wcout << ", ";
             }
@@ -103,7 +112,7 @@ int main(int argc, char* argv[]) {
         std::wstring monitorName(zMonitor.szPhysicalMonitorDescription);
         ReadVCPCode(zMonitor.hPhysicalMonitor, options.vcpCode, newValue, maxValue);
 
-        std::wcout << "{\"response\":{\"monitor\":\"" << monitorName << "\",\"vcp\":" <<  int(options.vcpCode) << ",\"value\":" << newValue << "}}";
+        std::wcout << "{\"response\":{\"monitor\":\"" << monitorName << "\",\"vcp\":" << int(options.vcpCode) << ",\"value\":" << newValue << ",\"max\":" << maxValue << "}}";
     }
 
     for (const auto& monitor : physicalMonitors) {
@@ -176,6 +185,57 @@ bool GetPhysicalMonitorsInfo(HMONITOR hMonitor, std::vector<PHYSICAL_MONITOR>& p
     return true;
 }
 
+std::string trim(const std::string& str) {
+    size_t first = str.find_first_not_of(' ');
+    if (first == std::string::npos)
+        return str;
+    size_t last = str.find_last_not_of(' ');
+    return str.substr(first, (last - first + 1));
+}
+
+// Function to parse key-value pairs from the capabilities string
+std::unordered_map<std::string, std::string> parseCapabilities(const std::string& capabilitiesString) {
+    std::unordered_map<std::string, std::string> capabilities;
+    std::istringstream stream(capabilitiesString);
+    std::string token;
+
+    while (std::getline(stream, token, ')')) {
+        size_t start = token.find('(');
+        if (start != std::string::npos) {
+            std::string key = trim(token.substr(0, start));
+            std::string value = trim(token.substr(start + 1));
+            capabilities[key] = value;
+        }
+    }
+
+    return capabilities;
+}
+
+std::unordered_map<std::string, std::string> GetMonitorCapabilities(HANDLE hMonitor) {
+    // Get the size of the capabilities string
+    DWORD capabilitiesStringLength = 0;
+    std::unordered_map<std::string, std::string> capabilities;
+    if (!GetCapabilitiesStringLength(hMonitor, &capabilitiesStringLength)) {
+        std::cerr << "Failed to get the size of the capabilities string. Error: " << GetLastError() << std::endl;
+        return capabilities;
+    }
+
+    // Allocate buffer for the capabilities string
+    char* capabilitiesString = new char[capabilitiesStringLength];
+
+    // Call the function to get the capabilities string
+    if (CapabilitiesRequestAndCapabilitiesReply(hMonitor, capabilitiesString, capabilitiesStringLength)) {
+        capabilities = parseCapabilities(capabilitiesString);
+    }
+    else {
+        std::cerr << "Failed to get monitor capabilities. Error: " << GetLastError() << std::endl;
+    }
+    
+    //std::cout << "Model Name: " << capabilities["model"] << std::endl;
+    // Clean up
+    delete[] capabilitiesString;
+    return capabilities;
+}
 bool ReadVCPCode(HANDLE hPhysicalMonitor, BYTE vcpCode, DWORD& currentValue, DWORD& maxValue) {
     MC_VCP_CODE_TYPE type;
     DWORD current, maximum;

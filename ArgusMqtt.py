@@ -299,9 +299,9 @@ def setMonitorInput(monitorName,input):
 def getMonitors(client):
     monitors = []
     log.info(f'Initializing Display Monitors')
-    monitor_names = runCommand("VCPController.exe -getMonitors",enabled=True)['monitors']
-    for name in monitor_names:
-        monitor = Device(name=name,client=client)
+    output = runCommand("VCPController.exe -getMonitors",enabled=True)['monitors']
+    for m in output:
+        monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
         monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,deviceName:runCommand(enabled=True, command=f'VCPController.exe -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{deviceName}"'))
         monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'USB-C'))
         monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'HDMI-1'))
