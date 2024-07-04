@@ -220,10 +220,10 @@ def initialize_bluetooth_batteries():
 
 
 def initialize_pc_sensors(this_pc):
-    log.debug(f'Initializing Disk Sensors')
+    log.debug(f'Initializing Drive Sensors')
     for drive in get_disk_usage_simple():
-        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Free')
-        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Total')
+        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Free')
+        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Total')
     
     log.debug(f'Initializing PC Sensors')
     sensors = ['CPU','GPU','RAM']
@@ -234,11 +234,11 @@ def initialize_pc_sensors(this_pc):
     this_pc.generate_sensor_topic(DeviceClass.TIMESTAMP,"Boot Time")
 
 def publish_pc_disk_sensors(this_pc):
-    log.debug(f'Publishing Disk Sensors')
+    log.debug(f'Publishing Drive Sensors')
     usage = get_disk_usage_simple()
     for drive in usage:
-        this_pc.publish_sensor(usage[drive].free,f'{drive} Free')
-        this_pc.publish_sensor(usage[drive].total,f'{drive} Total')
+        this_pc.publish_sensor(usage[drive].free,f'{drive} Drive Free')
+        this_pc.publish_sensor(usage[drive].total,f'{drive} Drive Total')
 
 def publish_pc_sensors(this_pc):    
     log.debug(f'Publishing PC Sensors')
