@@ -8,7 +8,9 @@ import wmi
 import time
 import datetime
 import subprocess
-import  psutil
+import psutil
+import socket
+
 def get_size(bytes, suffix="B"):
     factor = 1024
     for unit in ["", "K", "M", "G", "T", "P"]:
@@ -263,6 +265,28 @@ def get_bt_info():
     log.info(response)
     return battery_level
 
+
+def get_default_interface():
+    # Get default gateway details
+    gateways = psutil.net_if_addrs()
+    default_gateway = psutil.net_if_stats()
+    for interface, status in default_gateway.items():
+        if status.isup:
+            return interface
+    return None
+
+def get_network_info(interface=get_default_interface()):
+    network_info = {'MAC':None,'IP':None}
+    if not interface:
+        return network_info
+    addrs = psutil.net_if_addrs().get(interface, [])
+    
+    for addr in addrs:
+        if addr.family == socket.AF_INET:
+            network_info['IP'] = addr.address
+        elif addr.family == psutil.AF_LINK:
+            network_info['MAC'] = addr.address
+    return network_info
 
 if __name__ == "__main__":
     global log_path

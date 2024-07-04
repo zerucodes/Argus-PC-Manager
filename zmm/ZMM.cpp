@@ -70,9 +70,9 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < physicalMonitors.size(); ++i) {
             //std::wcout << L"{'Monitors':[ " << i << L", Name: " << physicalMonitors[i].szPhysicalMonitorDescription << std::endl;
             auto capabilities = GetMonitorCapabilities(physicalMonitors[i].hPhysicalMonitor);
-            for (auto it = capabilities.begin(); it != capabilities.end(); ++it) {
-                std::cout << it->first << " " << it->second << std::endl;
-            }
+            //for (auto it = capabilities.begin(); it != capabilities.end(); ++it) {
+            //    std::cout << it->first << " " << it->second << std::endl;
+            //}
 
             std::cout << "{\"model\":\"" << capabilities["model"] << "\"" << ",\"name\":\"";
             std::wcout << physicalMonitors[i].szPhysicalMonitorDescription << "\"}";
@@ -216,7 +216,7 @@ std::unordered_map<std::string, std::string> GetMonitorCapabilities(HANDLE hMoni
     DWORD capabilitiesStringLength = 0;
     std::unordered_map<std::string, std::string> capabilities;
     if (!GetCapabilitiesStringLength(hMonitor, &capabilitiesStringLength)) {
-        std::cerr << "Failed to get the size of the capabilities string. Error: " << GetLastError() << std::endl;
+        //std::cerr << "Failed to get the size of the capabilities string. Error: " << GetLastError() << std::endl;
         return capabilities;
     }
 

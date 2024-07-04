@@ -2,7 +2,7 @@ import yaml
 import ctypes
 import logging as log
 import re
-from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple,get_hw_attr,get_bluetooth_battery,get_last_boot
+from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple,get_hw_attr,get_bluetooth_battery,get_last_boot,get_network_info
 from enum import Enum
 import paho.mqtt.client as mqtt
 import threading
@@ -79,13 +79,15 @@ class DeviceClass(Enum):
     BUTTON = 'button'
 class Device:
 
-    def __init__(self, name, model=None,manufacturer=None,mac=None,client=None):
+    def __init__(self, name, model=None,manufacturer=None,mac=None,ip=None,bluetooth=None,client=None):
         self.name = name    
         self.model = model
         self.manufacturer = manufacturer
         self.device_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) # self.name.lower().replace(' ','_').replace('-','_')
         self.identifiers = [f'{self.device_name}_zmqtt_identifier']
         self.mac = mac
+        self.ip = ip
+        self.bluetooth = bluetooth
         self.set_config()
         self.sensor_topics = {}
         self.command_topics = {}
@@ -93,15 +95,20 @@ class Device:
         self.callbacks = {}
     def set_config(self):
         config =  {
-            "name" : self.name,
-            "identifiers" : self.identifiers
+            "name" : self.name
         }
+        if self.ip or self.mac or self.bluetooth:
+            config['connections'] = []
+        else:
+            config['identifiers'] = self.identifiers
         if self.manufacturer:
             config["manufacturer"] = self.manufacturer
         if self.model:
             config["model"] = self.model
         if self.mac:
-            config['connections'] = [['mac',self.mac]]
+            config['connections'].append(['mac',self.mac])
+        if self.ip:
+            config['connections'].append(['ip',self.ip])
         self.config = config
     
     def generate_sensor_topic(self,device_class,name=None,message=None):
@@ -208,15 +215,18 @@ class Device:
         sensor_topic = self.sensor_topics[sensor_name]
         self.client.publish(sensor_topic['state_topic'], value)
 
-def initialize_bluetooth_batteries():
+def initialize_bluetooth_batteries(client):
+    devices = []
     log.info(f'Inititalizing Bluetooth devices with battery data')
     bl_batteries = get_bluetooth_battery()
     log.debug(f'Found {bl_batteries}')
     for device_name in bl_batteries:
         battery = bl_batteries[device_name]
-        device = Device(device_name) # Device.generate_device_config(device_name)
+        device = Device(device_name,client=client) # Device.generate_device_config(device_name)
         sensor_topic = device.generate_sensor_topic(DeviceClass.BATTERY)
+        devices.append(device)
         log.info(f'{device_name} at {battery}%')
+    return devices
 
 
 def initialize_pc_sensors(this_pc):
@@ -347,11 +357,14 @@ def main():
     client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
 
     log.info(f'Initializing PC Device')
-    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),client=client)
+    net = get_network_info()
+    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),ip=net['IP'],mac=net['MAC'],client=client)
     managed_devices.append(pc)
     monitors = getMonitors(client=client)
     managed_devices.extend(monitors)
     initialize_pc_sensors(pc)
+    bluetooth_devices = initialize_bluetooth_batteries(client)
+    managed_devices.extend(bluetooth_devices)
     for device in managed_devices:
         device.publish_command_topics()
         device.publish_sensor_topics()
@@ -367,6 +380,9 @@ def main():
             if counter % 60*15 == 0:
                 publish_pc_disk_sensors(pc)
                 pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
+                for bl_device in bluetooth_devices:
+                    bl_batteries = get_bluetooth_battery()
+                    bl_device.publish_sensor(bl_batteries[bl_device.name], "Battery Level")
             time.sleep(1)
         except Exception as e:
             log.error(e)
