@@ -70,9 +70,9 @@ int main(int argc, char* argv[]) {
         for (size_t i = 0; i < physicalMonitors.size(); ++i) {
             //std::wcout << L"{'Monitors':[ " << i << L", Name: " << physicalMonitors[i].szPhysicalMonitorDescription << std::endl;
             auto capabilities = GetMonitorCapabilities(physicalMonitors[i].hPhysicalMonitor);
-            //for (auto it = capabilities.begin(); it != capabilities.end(); ++it) {
-            //    std::cout << it->first << " " << it->second << std::endl;
-            //}
+            for (auto it = capabilities.begin(); it != capabilities.end(); ++it) {
+                std::cout << it->first << " " << it->second << std::endl;
+            }
 
             std::cout << "{\"model\":\"" << capabilities["model"] << "\"" << ",\"name\":\"";
             std::wcout << physicalMonitors[i].szPhysicalMonitorDescription << "\"}";

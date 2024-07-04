@@ -12,6 +12,25 @@ from datetime import datetime
 import subprocess
 import os
 import functools
+
+def retry(times):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            attempts = 0
+            while attempts < times:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    attempts += 1
+                    log.warn(f"Attempt {attempts} failed: {e}")
+                    if attempts == times:
+                        log.error(f"Attempt {attempts} failed: {e}")
+                        raise
+                    time.sleep(1)  # Optional: wait for 1 second before retrying
+        return wrapper
+    return decorator
+
 def setup_config():
     config = None
     version = '2.0.0'
@@ -142,7 +161,6 @@ class Device:
         sensor['command_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/set'
         match device_class:
             case DeviceClass.LIGHT:
-                
                 sensor['optimistic'] = True
                 sensor['brightness'] = True  
         sensor['schema'] = 'json'
@@ -183,6 +201,7 @@ class Device:
             
             self.client.publish(sensor_topic['command_topic'].replace('/set','/config'), json.dumps(sensor_topic),retain=True)
             self.client.subscribe(sensor_topic['command_topic'])
+
     def publish_sensor(self,value,name):
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) 
         sensor_name =  re.sub(r'_{2,}','_',sensor_name)
@@ -225,13 +244,15 @@ def publish_pc_sensors(this_pc):
     log.debug(f'Publishing PC Sensors')
     sensors = ['CPU','GPU','RAM']
     for sensor in sensors:
-        temp = get_pc_sensor(sensor,'Temperature')
-        usage = get_pc_sensor(sensor,'Usage')
-        if temp:
-            this_pc.publish_sensor(temp,f'{sensor} Temperature')
-        if usage:
-            this_pc.publish_sensor(usage,f'{sensor} Usage')
-
+        try:
+            temp = get_pc_sensor(sensor,'Temperature')
+            usage = get_pc_sensor(sensor,'Usage')
+            if temp:
+                this_pc.publish_sensor(temp,f'{sensor} Temperature')
+            if usage:
+                this_pc.publish_sensor(usage,f'{sensor} Usage')
+        except Exception as e:
+            log.error(f'Unable to publish {sensor}')
 def get_pc_sensor(sensor,type):
     match sensor:
         case 'CPU':
@@ -266,7 +287,7 @@ def on_message(client, userdata, message,managed_devices=None):
     for device in  managed_devices:
         for callback_topic in device.callbacks:
             if message.topic == callback_topic:
-                device.callbacks[callback_topic](payload=payload,deviceName=device.name)
+                device.callbacks[callback_topic](payload=payload,device=device)
     # if message.topic == f"homeassistant/light/m27q/screen_brightness/set":
     #     if 'brightness' in payload:
     #         value = payload['brightness']
@@ -290,6 +311,8 @@ def runCommand(command,enabled=False):
 def getPayloadAttr(payload,attr,default=0):
     if attr in payload:
         return payload[attr]
+    elif attr == 'brightness':
+        return 255 if payload['state'] == 'ON' else 0
     else:
         return default
     
@@ -302,11 +325,11 @@ def getMonitors(client):
     output = runCommand("VCPController.exe -getMonitors",enabled=True)['monitors']
     for m in output:
         monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
-        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,deviceName:runCommand(enabled=True, command=f'VCPController.exe -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{deviceName}"'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'USB-C'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'HDMI-1'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'HDMI-2'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda deviceName,payload=None:setMonitorInput(deviceName,'DisplayPort'))
+        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'VCPController.exe -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
+        monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
         monitors.append(monitor)
     return monitors
 
@@ -348,6 +371,7 @@ def main():
         except Exception as e:
             log.error(e)
         counter+=1
+
 if __name__ == '__main__':
     main()
 
