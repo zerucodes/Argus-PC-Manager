@@ -10,7 +10,6 @@ import json
 import time
 from datetime import datetime
 import subprocess
-import os
 import functools
 
 def retry(times,delay=1):
@@ -68,7 +67,11 @@ def setup_config():
     log.debug(f'Config: {str(config)}')
 
     return config
-
+class INPUT(Enum):
+        DP = 15
+        HDMI1 = 17
+        HDMI2 = 18
+        USBC = 27
 class DeviceClass(Enum):
     BATTERY = 'battery'
     DATA_SIZE = 'data_size'
@@ -327,7 +330,20 @@ def getPayloadAttr(payload,attr,default=0):
         return default
     
 def setMonitorInput(monitorName,input):
-    log.debug(f"Setting {monitorName} {input} input")
+    selection = INPUT.DP
+    match input:
+        case 'USB-C':
+            selection = INPUT.USBC
+        case 'HDMI-1':
+            selection = INPUT.HDMI1
+        case 'HDMI-2':
+            selection = INPUT.HDMI2
+        case 'DisplayPort':
+            selection = INPUT.DP
+    output = runCommand(f'VCPController.exe -setVCP --monitor="{monitorName}" --vcp=0x60 --value={selection.value} ',enabled=True)
+
+    
+    log.debug(f"{output}")
 
 def getMonitors(client):
     monitors = []
