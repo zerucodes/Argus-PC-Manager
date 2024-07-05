@@ -13,7 +13,7 @@ import subprocess
 import os
 import functools
 
-def retry(times):
+def retry(times,delay=1):
     def decorator(func):
         @functools.wraps(func)
         def wrapper(*args, **kwargs):
@@ -27,7 +27,7 @@ def retry(times):
                     if attempts == times:
                         log.error(f"Attempt {attempts} failed: {e}")
                         raise
-                    time.sleep(1)  # Optional: wait for 1 second before retrying
+                    time.sleep(delay)  # Optional: wait for 1 second before retrying
         return wrapper
     return decorator
 
@@ -343,13 +343,14 @@ def getMonitors(client):
         monitors.append(monitor)
     return monitors
 
+@retry(times=10,delay=60)
 def main():
     config = setup_config()
     broker =  config['mqtt_ip']
     port = 1883
     client = mqtt.Client()
     managed_devices = []
-
+    
     client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
     client.connect(broker, port)
     client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
@@ -373,6 +374,7 @@ def main():
     threading.Thread(target=client.loop_forever, daemon=True).start()    
     log.info(f'Sending Sensor data on loop...')
     counter  = 0
+    exception_count = 0
     while True:
         try:
             if counter % 15 == 0:
@@ -385,7 +387,10 @@ def main():
                     bl_device.publish_sensor(bl_batteries[bl_device.name], "Battery Level")
             time.sleep(1)
         except Exception as e:
-            log.error(e)
+            exception_count += 1
+            log.error(f'[Exeption.{exception_count}]: {e}')
+            if exception_count > 3:
+                raise f'Too many exceptions, restart required'
         counter+=1
 
 if __name__ == '__main__':
