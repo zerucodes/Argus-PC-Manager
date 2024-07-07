@@ -22,7 +22,7 @@ def retry(times,delay=1):
                     return func(*args, **kwargs)
                 except Exception as e:
                     attempts += 1
-                    log.warn(f"Attempt {attempts} failed: {e}")
+                    log.warning(f"Attempt {attempts} failed: {e}")
                     if attempts == times:
                         log.error(f"Attempt {attempts} failed: {e}")
                         raise
@@ -111,7 +111,9 @@ class Device:
         if self.mac:
             config['connections'].append(['mac',self.mac])
         if self.ip:
-            config['connections'].append(['ip',self.ip])
+            config['connections'].append(['ip',self.bluetooth])
+        if self.bluetooth:
+            config['connections'].append(['bluetooth',self.bluetooth])
         self.config = config
     
     def generate_sensor_topic(self,device_class,name=None,message=None):
@@ -221,14 +223,14 @@ class Device:
 def initialize_bluetooth_batteries(client):
     devices = []
     log.info(f'Inititalizing Bluetooth devices with battery data')
-    bl_batteries = get_bluetooth_battery()
-    log.debug(f'Found {bl_batteries}')
-    for device_name in bl_batteries:
-        battery = bl_batteries[device_name]
-        device = Device(device_name,client=client) # Device.generate_device_config(device_name)
-        sensor_topic = device.generate_sensor_topic(DeviceClass.BATTERY)
+    bl_devices = get_bluetooth_battery()
+    log.debug(f'Found {bl_devices}')
+    for bl_device in bl_devices:
+        device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=client)
+        battery = bl_device['battery']
+        device.generate_sensor_topic(DeviceClass.BATTERY)
         devices.append(device)
-        log.info(f'{device_name} at {battery}%')
+        log.info(f'{bl_device["name"]} at {battery}%')
     return devices
 
 
@@ -395,12 +397,16 @@ def main():
         try:
             if counter % 15 == 0:
                 publish_pc_sensors(pc)
-            if counter % 60*15 == 0:
+            if counter % (60*60*15) == 0:
                 publish_pc_disk_sensors(pc)
                 pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
+                bl_batteries = get_bluetooth_battery()
+
                 for bl_device in bluetooth_devices:
-                    bl_batteries = get_bluetooth_battery()
-                    bl_device.publish_sensor(bl_batteries[bl_device.name], "Battery Level")
+                    for battery_info in bl_batteries:
+                        if battery_info['name'] == bl_device.name:
+                            battery = battery_info['battery']
+                            bl_device.publish_sensor(battery, "Battery Level")
             time.sleep(1)
         except Exception as e:
             exception_count += 1
