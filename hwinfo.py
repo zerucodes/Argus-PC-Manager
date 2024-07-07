@@ -210,13 +210,21 @@ def get_battery_level(friendly_name):
 
 def get_bluetooth_battery():
     bt_command = '''
+    $devices = @()
     $bl = Get-PnpDevice -FriendlyName "*"  -Class Bluetooth
-        $bl | ForEach-Object {
-            $battery = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2"  | Where-Object Type -ne 'Empty' 
-            if ($battery.Data) {
-                Write-Host "$($_.FriendlyName),,,$($battery.Data)"
+    $bl | ForEach-Object {
+        $battery = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2"  | Where-Object Type -ne 'Empty' 
+        if ($battery.Data) {
+            $mac = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{A35996AB-11CF-4935-8B61-A6761081ECDF} 12"  | Where-Object Type -ne 'Empty' 
+            $device = @{name = $_.FriendlyName
+            battery = $battery.Data
+            mac =$mac.Data 
             }
+            $devices += $device
         }
+    }
+
+    Write-Host ($devices | ConvertTo-Json)
     '''
     result = subprocess.run(
         ["powershell", "-Command", bt_command],
@@ -225,14 +233,8 @@ def get_bluetooth_battery():
     )
     if result.returncode != 0:
         raise Exception(f"Error executing PowerShell: {result.stderr}")
-    r = result.stdout.strip()
-    try:
-        batteries = {}
-        for line in r.split("\n"):
-            batteries[line.split(",,,")[0]] = int(line.split(",,,")[1])
-        return batteries
-    except  Exception as e:
-        return {}
+    r = result.stdout
+    return json.loads(r)
     
 def get_last_boot():
 
