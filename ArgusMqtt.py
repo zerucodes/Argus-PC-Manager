@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 import subprocess
 import functools
+import GPUtil
 
 def retry(times,delay=1):
     def decorator(func):
@@ -111,7 +112,7 @@ class Device:
         if self.mac:
             config['connections'].append(['mac',self.mac])
         if self.ip:
-            config['connections'].append(['ip',self.bluetooth])
+            config['connections'].append(['ip',self.ip])
         if self.bluetooth:
             config['connections'].append(['bluetooth',self.bluetooth])
         self.config = config
@@ -130,6 +131,7 @@ class Device:
                 if name:
                     sensor['entity_category'] = 'diagnostic'
                     sensor['unit_of_measurement'] = 'B'
+                    sensor['suggested_display_precision'] = 0
             case DeviceClass.POWER:
                 sensor['name'] = f'{name} Usage'
                 sensor['unit_of_measurement'] = '%'
@@ -277,12 +279,14 @@ def get_pc_sensor(sensor,type):
                 case 'Temperature':
                     return get_cpu_temperature()
         case 'GPU':
+            gpus = GPUtil.getGPUs()
+            if len(gpus) > 1:
+                log.error(f'Multiple GPUs not supported yet found ({len(gpus)}), using first')
             match type:
                 case 'Usage':
-                    return None
+                    return gpus[0].load if len(gpus)>= 1 else None
                 case 'Temperature':
-                    return None
-            print("")
+                    return  gpus[0].temperature if len(gpus)>= 1 else None
         case 'RAM':
             match type:
                 case 'Usage':
