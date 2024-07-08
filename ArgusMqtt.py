@@ -11,6 +11,7 @@ import time
 from datetime import datetime
 import subprocess
 import functools
+import socket
 import GPUtil
 
 def retry(times,delay=1):
@@ -81,6 +82,7 @@ class DeviceClass(Enum):
     LIGHT = 'light'
     TIMESTAMP = 'timestamp'
     BUTTON = 'button'
+    SWITCH = 'switch'
 class Device:
 
     def __init__(self, name, model=None,manufacturer=None,mac=None,ip=None,bluetooth=None,client=None):
@@ -177,6 +179,8 @@ class Device:
             case DeviceClass.LIGHT:
                 sensor['optimistic'] = True
                 sensor['brightness'] = True  
+            case DeviceClass.SWITCH:
+                sensor['optimistic'] = True
         sensor['schema'] = 'json'
              
         sensor['state_topic'] = f'homeassistant/sensor/{self.device_name}/{sensor_name}/state'
@@ -249,6 +253,7 @@ def initialize_pc_sensors(this_pc):
         this_pc.generate_sensor_topic(DeviceClass.POWER,sensor)
 
     this_pc.generate_sensor_topic(DeviceClass.TIMESTAMP,"Boot Time")
+    this_pc.generate_command_topic(DeviceClass.SWITCH,name='Power', callback= lambda device,payload=None:wake_on_lan(this_pc.mac))
 
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
@@ -351,6 +356,20 @@ def setMonitorInput(monitorName,input):
     
     log.debug(f"{output}")
 
+def wake_on_lan(mac_address= '2C:F0:5D:A9:51:B9'):
+    # Forming the magic packet to turn on the PC
+    mac_address = mac_address.replace(':', '').replace('-','')
+    magic_packet = 'FF' * 6 + mac_address * 16
+    magic_packet_bytes = bytes.fromhex(magic_packet)
+
+    # Broadcasting the magic packet on the local network
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.connect((socket.gethostbyname(socket.gethostname()), 368))
+    sock.sendto(magic_packet_bytes, ('192.168.1.255', 9))
+    sock.close()
+
+
 def getMonitors(client):
     monitors = []
     log.info(f'Initializing Display Monitors')
@@ -382,11 +401,13 @@ def main():
     log.info(f'Initializing PC Device')
     net = get_network_info()
     pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),ip=net['IP'],mac=net['MAC'],client=client)
-    managed_devices.append(pc)
-    monitors = getMonitors(client=client)
-    managed_devices.extend(monitors)
     initialize_pc_sensors(pc)
+
+    monitors = getMonitors(client=client)
     bluetooth_devices = initialize_bluetooth_batteries(client)
+
+    managed_devices.append(pc)
+    managed_devices.extend(monitors)
     managed_devices.extend(bluetooth_devices)
     for device in managed_devices:
         device.publish_command_topics()
