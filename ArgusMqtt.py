@@ -253,7 +253,16 @@ def initialize_pc_sensors(this_pc):
         this_pc.generate_sensor_topic(DeviceClass.POWER,sensor)
 
     this_pc.generate_sensor_topic(DeviceClass.TIMESTAMP,"Boot Time")
-    this_pc.generate_command_topic(DeviceClass.SWITCH,name='Power', callback= lambda device,payload=None:wake_on_lan(this_pc.mac))
+    this_pc.generate_command_topic(DeviceClass.SWITCH,name='Power', callback= lambda payload,device:pc_power(device, status=getPayloadAttr(payload,'status')))
+
+def pc_power(device, status):
+    if status == 'ON':
+        # wake_on_lan()
+        print(f"test  {status}")
+    elif status == 'OFF':
+        publish_pc_sensors(device, shutdown=True)
+        exit(0)
+        # runCommand(command="C:\\Windows\\System32\\shutdown.exe -s")
 
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
@@ -262,19 +271,24 @@ def publish_pc_disk_sensors(this_pc):
         this_pc.publish_sensor(usage[drive].free,f'{drive} Drive Free')
         this_pc.publish_sensor(usage[drive].total,f'{drive} Drive Total')
 
-def publish_pc_sensors(this_pc):    
+def publish_pc_sensors(this_pc, shutdown=False):    
     log.debug(f'Publishing PC Sensors')
     sensors = ['CPU','GPU','RAM']
     for sensor in sensors:
         try:
-            temp = get_pc_sensor(sensor,'Temperature')
-            usage = get_pc_sensor(sensor,'Usage')
-            if temp:
+            if shutdown:
+                temp = 0
+                usage = 0
+            else:
+                temp = get_pc_sensor(sensor,'Temperature')
+                usage = get_pc_sensor(sensor,'Usage')
+            if temp is not None:
                 this_pc.publish_sensor(temp,f'{sensor} Temperature')
-            if usage:
+            if usage is not None:
                 this_pc.publish_sensor(usage,f'{sensor} Usage')
         except Exception as e:
             log.error(f'Unable to publish {sensor}')
+
 def get_pc_sensor(sensor,type):
     match sensor:
         case 'CPU':
@@ -337,6 +351,8 @@ def getPayloadAttr(payload,attr,default=0):
         return payload[attr]
     elif attr == 'brightness':
         return 255 if payload['state'] == 'ON' else 0
+    elif attr == 'status': 
+        return payload
     else:
         return default
     
@@ -422,7 +438,7 @@ def main():
         try:
             if counter % 15 == 0:
                 publish_pc_sensors(pc)
-            if counter % (60*60*15) == 0:
+            if counter % (60*15) == 0:
                 publish_pc_disk_sensors(pc)
                 pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
                 bl_batteries = get_bluetooth_battery()
