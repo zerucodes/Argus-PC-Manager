@@ -411,12 +411,8 @@ def main():
     client = mqtt.Client()
     managed_devices = []
     global exe_dir
-    if getattr(sys, 'frozen', False):
-        # The application is frozen
-        exe_dir = sys._MEIPASS
-    else:
-        # The application is not frozen
-        exe_dir = os.path.dirname(os.path.abspath(__file__))
+
+    exe_dir = os.path.dirname("C:\Argus\\") #  os.path.dirname(os.path.abspath(__file__))
 
     client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
     client.connect(broker, port)
