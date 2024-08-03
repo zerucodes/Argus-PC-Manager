@@ -13,7 +13,7 @@ import subprocess
 import functools
 import socket
 import GPUtil
-
+import os,sys
 def retry(times,delay=1):
     def decorator(func):
         @functools.wraps(func)
@@ -260,7 +260,9 @@ def pc_power(device, status):
         # wake_on_lan()
         print(f"test  {status}")
     elif status == 'OFF':
-        publish_pc_sensors(device, shutdown=True)
+        global shutdown
+        shutdown = True
+        time.sleep(3)        
         exit(0)
         # runCommand(command="C:\\Windows\\System32\\shutdown.exe -s")
 
@@ -271,48 +273,47 @@ def publish_pc_disk_sensors(this_pc):
         this_pc.publish_sensor(usage[drive].free,f'{drive} Drive Free')
         this_pc.publish_sensor(usage[drive].total,f'{drive} Drive Total')
 
-def publish_pc_sensors(this_pc, shutdown=False):    
+def publish_pc_sensors(this_pc):    
     log.debug(f'Publishing PC Sensors')
     sensors = ['CPU','GPU','RAM']
+    global shutdown
     for sensor in sensors:
         try:
-            if shutdown:
-                temp = 0
-                usage = 0
-            else:
-                temp = get_pc_sensor(sensor,'Temperature')
-                usage = get_pc_sensor(sensor,'Usage')
+            temp = get_pc_sensor(sensor,'Temperature')
+            usage = get_pc_sensor(sensor,'Usage')
             if temp is not None:
-                this_pc.publish_sensor(temp,f'{sensor} Temperature')
+                this_pc.publish_sensor(0 if shutdown else temp,f'{sensor} Temperature')
             if usage is not None:
-                this_pc.publish_sensor(usage,f'{sensor} Usage')
+                this_pc.publish_sensor(0 if shutdown else usage,f'{sensor} Usage')
         except Exception as e:
             log.error(f'Unable to publish {sensor}')
 
 def get_pc_sensor(sensor,type):
+    value = 0
     match sensor:
         case 'CPU':
             match type:
                 case 'Usage':
-                    return get_cpu_load()
+                    value = get_cpu_load()
                 case 'Temperature':
-                    return get_cpu_temperature()
+                    value = get_cpu_temperature()
         case 'GPU':
             gpus = GPUtil.getGPUs()
             if len(gpus) > 1:
                 log.error(f'Multiple GPUs not supported yet found ({len(gpus)}), using first')
             match type:
                 case 'Usage':
-                    return gpus[0].load if len(gpus)>= 1 else None
+                    value = gpus[0].load if len(gpus)>= 1 else None
                 case 'Temperature':
-                    return  gpus[0].temperature if len(gpus)>= 1 else None
+                    value =  gpus[0].temperature if len(gpus)>= 1 else None
         case 'RAM':
             match type:
                 case 'Usage':
-                    return get_ram_usage()
+                    value = get_ram_usage()
                 case 'Temperature':
-                    return get_ram_temperature()
-    return None
+                    value = get_ram_temperature()
+    value = None if value is None else round(value,3) 
+    return  value
 
 def on_message(client, userdata, message,managed_devices=None):
     if isinstance(message.payload,bytes):
@@ -367,7 +368,8 @@ def setMonitorInput(monitorName,input):
             selection = INPUT.HDMI2
         case 'DisplayPort':
             selection = INPUT.DP
-    output = runCommand(f'VCPController.exe -setVCP --monitor="{monitorName}" --vcp=0x60 --value={selection.value} ',enabled=True)
+    global exe_dir
+    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")}  -setVCP --monitor="{monitorName}" --vcp=0x60 --value={selection.value} ',enabled=True)
 
     
     log.debug(f"{output}")
@@ -389,10 +391,11 @@ def wake_on_lan(mac_address= '2C:F0:5D:A9:51:B9'):
 def getMonitors(client):
     monitors = []
     log.info(f'Initializing Display Monitors')
-    output = runCommand("VCPController.exe -getMonitors",enabled=True)['monitors']
+    global exe_dir
+    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")} -getMonitors',enabled=True)['monitors']
     for m in output:
         monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
-        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'VCPController.exe -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
+        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'{os.path.join(exe_dir, "VCPController.exe")} -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
         monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
         monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
         monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
@@ -407,7 +410,14 @@ def main():
     port = 1883
     client = mqtt.Client()
     managed_devices = []
-    
+    global exe_dir
+    if getattr(sys, 'frozen', False):
+        # The application is frozen
+        exe_dir = sys._MEIPASS
+    else:
+        # The application is not frozen
+        exe_dir = os.path.dirname(os.path.abspath(__file__))
+
     client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
     client.connect(broker, port)
     client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
@@ -429,25 +439,33 @@ def main():
         device.publish_command_topics()
         device.publish_sensor_topics()
 
+    global shutdown 
+    shutdown = False
     client.on_message = functools.partial(on_message,managed_devices=managed_devices)
-    threading.Thread(target=client.loop_forever, daemon=True).start()    
+    listen_thread = threading.Thread(target=client.loop_forever, daemon=True)
+    listen_thread.start()    
     log.info(f'Sending Sensor data on loop...')
     counter  = 0
     exception_count = 0
     while True:
         try:
-            if counter % 15 == 0:
+            if shutdown:
+                listen_thread.join()
                 publish_pc_sensors(pc)
-            if counter % (60*15) == 0:
-                publish_pc_disk_sensors(pc)
-                pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
-                bl_batteries = get_bluetooth_battery()
+                exit()
+            else:
+                if counter % 15 == 0:
+                    publish_pc_sensors(pc)
+                if counter % (60*15) == 0:
+                    publish_pc_disk_sensors(pc)
+                    pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
+                    bl_batteries = get_bluetooth_battery()
 
-                for bl_device in bluetooth_devices:
-                    for battery_info in bl_batteries:
-                        if battery_info['name'] == bl_device.name:
-                            battery = battery_info['battery']
-                            bl_device.publish_sensor(battery, "Battery Level")
+                    for bl_device in bluetooth_devices:
+                        for battery_info in bl_batteries:
+                            if battery_info['name'] == bl_device.name:
+                                battery = battery_info['battery']
+                                bl_device.publish_sensor(battery, "Battery Level")
             time.sleep(1)
         except Exception as e:
             exception_count += 1
