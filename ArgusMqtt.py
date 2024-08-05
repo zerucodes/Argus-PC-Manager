@@ -1,6 +1,7 @@
 import yaml
 import ctypes
-import logging as log
+import logging
+from logging.handlers import TimedRotatingFileHandler
 import re
 from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple,get_hw_attr,get_bluetooth_battery,get_last_boot,get_network_info
 from enum import Enum
@@ -13,7 +14,31 @@ import subprocess
 import functools
 import socket
 import GPUtil
-import os,sys
+import os,sys,traceback
+
+def setup_logger():
+    # Setup Logging:
+    log = logging.getLogger()
+    log.setLevel(logging.DEBUG)
+
+    file_handler = TimedRotatingFileHandler(f'C:\\Temp\\argusmqtt_{datetime.now().strftime("%Y-%m-%d")}.log', when='midnight', interval=1, backupCount=5)
+    file_handler.setLevel(logging.DEBUG)
+    file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(funcName)s: %(message)s'))
+    file_handler.suffix = "%Y-%m-%d"
+    # Create a console handler that logs messages to the console
+    console_handler = logging.StreamHandler()
+    console_handler.setLevel(logging.DEBUG)
+    console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(funcName)s: %(message)s'))
+
+    # Add both handlers to the logger
+    log.addHandler(file_handler)
+    log.addHandler(console_handler)
+
+global log
+setup_logger()
+log = logging.getLogger()
+
+
 def retry(times,delay=1):
     def decorator(func):
         @functools.wraps(func)
@@ -32,11 +57,16 @@ def retry(times,delay=1):
         return wrapper
     return decorator
 
+
 def setup_config():
     config = None
     version = '2.0.0'
     featurecomment = 'MQTT Integration'
-    log.basicConfig(level=log.DEBUG, format='%(asctime)s [%(levelname)s] %(funcName)s: %(message)s')    
+    if not os.path.exists('C:\\Temp'):
+        os.mkdir('C:\\Temp\\')
+
+    
+    # log.basicConfig(level=log.DEBUG, format='%(asctime)s [%(levelname)s] %(funcName)s: %(message)s',filename='C:\\Temp\\argusmqtt.log')    
     log.debug('Looking for config')
     # Set up config
     if yaml is not None:
@@ -228,15 +258,19 @@ class Device:
 
 def initialize_bluetooth_batteries(client):
     devices = []
-    log.info(f'Inititalizing Bluetooth devices with battery data')
-    bl_devices = get_bluetooth_battery()
-    log.debug(f'Found {bl_devices}')
-    for bl_device in bl_devices:
-        device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=client)
-        battery = bl_device['battery']
-        device.generate_sensor_topic(DeviceClass.BATTERY)
-        devices.append(device)
-        log.info(f'{bl_device["name"]} at {battery}%')
+    try:
+        log.info(f'Inititalizing Bluetooth devices with battery data')
+        bl_devices = get_bluetooth_battery()
+        if bl_devices:
+            log.debug(f'Found {bl_devices}')
+        for bl_device in bl_devices:
+            device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=client)
+            battery = bl_device['battery']
+            device.generate_sensor_topic(DeviceClass.BATTERY)
+            devices.append(device)
+            log.info(f'{bl_device["name"]} at {battery}%')
+    except Exception as e:
+        log.error(f'{e}')
     return devices
 
 
@@ -262,8 +296,9 @@ def pc_power(device, status):
     elif status == 'OFF':
         global shutdown
         shutdown = True
+        publish_pc_sensors(device)
         time.sleep(3)        
-        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=True)
+        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=False)
         sys.exit()
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
@@ -285,10 +320,19 @@ def publish_pc_sensors(this_pc):
             if usage is not None:
                 this_pc.publish_sensor(0 if shutdown else usage,f'{sensor} Usage')
         except Exception as e:
-            log.error(f'Unable to publish {sensor}')
+            log.error(f'Unable to publish {sensor}: {e}')
 
 def get_pc_sensor(sensor,type):
     value = 0
+    global valid_sensors,shutdown
+    valid_sensors = []
+    
+    # During shutdown check if the sensor has been sent before
+    #  if not, send None for faster shutdown
+    # Todo: send Unavailable for temp, 0 for usage
+    if shutdown and tuple((sensor,type)) not in valid_sensors:
+        log.info(f'Shutdown flag {shutdown}, sending 0')
+        return 0
     match sensor:
         case 'CPU':
             match type:
@@ -312,6 +356,9 @@ def get_pc_sensor(sensor,type):
                 case 'Temperature':
                     value = get_ram_temperature()
     value = None if value is None else round(value,3) 
+    if value is not None and tuple((sensor,type)) not in valid_sensors:
+        valid_sensors.append(tuple((sensor,type)))
+
     return  value
 
 def on_message(client, userdata, message,managed_devices=None):
@@ -336,7 +383,7 @@ def on_message(client, userdata, message,managed_devices=None):
 def runCommand(command,enabled=False):
     if (command):
         try:
-            log.debug(f'Running command: {command}' if enabled else 'Running demo: {command}')
+            log.debug(f'Running command: {command}' if enabled else f'Running demo: {command}')
             if enabled:
                 out = subprocess.run(command,capture_output=True)
                 if (out.returncode != 0):
@@ -453,7 +500,7 @@ def main():
             if shutdown:
                 listen_thread.join()
                 publish_pc_sensors(pc)
-                exit()
+                sys.exit()
             else:
                 if counter % 45 == 0:
                     publish_pc_sensors(pc)
@@ -470,7 +517,7 @@ def main():
             time.sleep(1)
         except Exception as e:
             exception_count += 1
-            log.error(f'[Exeption.{exception_count}]: {e}')
+            log.error(f'[Exeption.{exception_count}]: {e} {e.__traceback__.tb_lineno} {traceback.format_exc()}')
             if exception_count > 3:
                 raise f'Too many exceptions, restart required'
         counter+=1
