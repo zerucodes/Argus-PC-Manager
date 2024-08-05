@@ -450,9 +450,9 @@ def main():
                 publish_pc_sensors(pc)
                 exit()
             else:
-                if counter % 15 == 0:
+                if counter % 45 == 0:
                     publish_pc_sensors(pc)
-                if counter % (60*15) == 0:
+                if counter % (60*45) == 0:
                     publish_pc_disk_sensors(pc)
                     pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
                     bl_batteries = get_bluetooth_battery()
