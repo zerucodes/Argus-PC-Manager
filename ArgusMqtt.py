@@ -76,7 +76,7 @@ def setup_config():
                 log.debug(f'Using config at {config_file}')
         except FileNotFoundError:
             try:
-                with open(r'mqtt.yaml') as config_file:
+                with open(r'C:\\Argus\\\mqtt.yaml') as config_file:
                     config = yaml.safe_load(config_file)
                     log.debug(f'Using config at {config_file}')
             except FileNotFoundError:
@@ -298,7 +298,7 @@ def pc_power(device, status):
         shutdown = True
         publish_pc_sensors(device)
         time.sleep(3)        
-        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=False)
+        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=True)
         sys.exit()
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
@@ -392,6 +392,7 @@ def runCommand(command,enabled=False):
                 return json.loads(out.stdout.decode())
         except Exception as e:
             log.warning(f'Command Error {e}')
+            return None
 
 def getPayloadAttr(payload,attr,default=0):
     if attr in payload:
@@ -438,15 +439,18 @@ def getMonitors(client):
     monitors = []
     log.info(f'Initializing Display Monitors')
     global exe_dir
-    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")} -getMonitors',enabled=True)['monitors']
-    for m in output:
-        monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
-        monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'{os.path.join(exe_dir, "VCPController.exe")} -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
-        monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
-        monitors.append(monitor)
+    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")} -getMonitors',enabled=True)
+    if output and 'monitors' in output:
+        output = output['monitors']
+    if output:
+        for m in output:
+            monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
+            monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'{os.path.join(exe_dir, "VCPController.exe")} -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
+            monitors.append(monitor)
     return monitors
 
 @retry(times=10,delay=60)
@@ -473,10 +477,12 @@ def main():
 
     monitors = getMonitors(client=client)
     bluetooth_devices = initialize_bluetooth_batteries(client)
-
-    managed_devices.append(pc)
-    managed_devices.extend(monitors)
-    managed_devices.extend(bluetooth_devices)
+    if pc:
+        managed_devices.append(pc)
+    if monitors:
+        managed_devices.extend(monitors)
+    if bluetooth_devices: 
+        managed_devices.extend(bluetooth_devices)
     for device in managed_devices:
         device.publish_command_topics()
         device.publish_sensor_topics()

@@ -8,3 +8,5 @@ Debug
 
 # Python Debugging
 __pycache__
+build
+dist
