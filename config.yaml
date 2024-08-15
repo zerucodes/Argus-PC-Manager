@@ -1,6 +1,0 @@
-secret: argus.
-log_path: log.ztxt
-cmmExe: ControlMyMonitor.exe
-enabled: False
-
-

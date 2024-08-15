@@ -2,20 +2,41 @@ import yaml
 import ctypes
 import logging as log
 import re
-from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple,get_hw_attr,get_bluetooth_battery,get_last_boot
+from hwinfo import get_cpu_load,get_cpu_temperature,get_ram_usage,get_ram_temperature,get_disk_usage_simple,get_hw_attr,get_bluetooth_battery,get_last_boot,get_network_info
 from enum import Enum
 import paho.mqtt.client as mqtt
 import threading
 import json 
 import time
 from datetime import datetime
+import subprocess
+import functools
+import socket
+import GPUtil
+import os,sys
+def retry(times,delay=1):
+    def decorator(func):
+        @functools.wraps(func)
+        def wrapper(*args, **kwargs):
+            attempts = 0
+            while attempts < times:
+                try:
+                    return func(*args, **kwargs)
+                except Exception as e:
+                    attempts += 1
+                    log.warning(f"Attempt {attempts} failed: {e}")
+                    if attempts == times:
+                        log.error(f"Attempt {attempts} failed: {e}")
+                        raise
+                    time.sleep(delay)  # Optional: wait for 1 second before retrying
+        return wrapper
+    return decorator
 
 def setup_config():
     config = None
-    version = '0.1.0'
-    featurecomment = 'Initial Revision'
-    log.basicConfig(level=log.INFO)
-
+    version = '2.0.0'
+    featurecomment = 'MQTT Integration'
+    log.basicConfig(level=log.DEBUG, format='%(asctime)s [%(levelname)s] %(funcName)s: %(message)s')    
     log.debug('Looking for config')
     # Set up config
     if yaml is not None:
@@ -25,7 +46,7 @@ def setup_config():
                 log.debug(f'Using config at {config_file}')
         except FileNotFoundError:
             try:
-                with open(r'mqtt.yaml') as config_file:
+                with open(r'C:\\Argus\\\mqtt.yaml') as config_file:
                     config = yaml.safe_load(config_file)
                     log.debug(f'Using config at {config_file}')
             except FileNotFoundError:
@@ -48,7 +69,11 @@ def setup_config():
     log.debug(f'Config: {str(config)}')
 
     return config
-
+class INPUT(Enum):
+        DP = 15
+        HDMI1 = 17
+        HDMI2 = 18
+        USBC = 27
 class DeviceClass(Enum):
     BATTERY = 'battery'
     DATA_SIZE = 'data_size'
@@ -57,31 +82,41 @@ class DeviceClass(Enum):
     LIGHT = 'light'
     TIMESTAMP = 'timestamp'
     BUTTON = 'button'
+    SWITCH = 'switch'
 class Device:
 
-    def __init__(self, name, model=None,manufacturer=None,mac=None,client=None):
+    def __init__(self, name, model=None,manufacturer=None,mac=None,ip=None,bluetooth=None,client=None):
         self.name = name    
         self.model = model
         self.manufacturer = manufacturer
         self.device_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) # self.name.lower().replace(' ','_').replace('-','_')
         self.identifiers = [f'{self.device_name}_zmqtt_identifier']
         self.mac = mac
+        self.ip = ip
+        self.bluetooth = bluetooth
         self.set_config()
         self.sensor_topics = {}
         self.command_topics = {}
         self.client = client
-        
+        self.callbacks = {}
     def set_config(self):
         config =  {
-            "name" : self.name,
-            "identifiers" : self.identifiers
+            "name" : self.name
         }
+        if self.ip or self.mac or self.bluetooth:
+            config['connections'] = []
+        else:
+            config['identifiers'] = self.identifiers
         if self.manufacturer:
             config["manufacturer"] = self.manufacturer
         if self.model:
             config["model"] = self.model
         if self.mac:
-            config['connections'] = [['mac',self.mac]]
+            config['connections'].append(['mac',self.mac])
+        if self.ip:
+            config['connections'].append(['ip',self.ip])
+        if self.bluetooth:
+            config['connections'].append(['bluetooth',self.bluetooth])
         self.config = config
     
     def generate_sensor_topic(self,device_class,name=None,message=None):
@@ -98,6 +133,7 @@ class Device:
                 if name:
                     sensor['entity_category'] = 'diagnostic'
                     sensor['unit_of_measurement'] = 'B'
+                    sensor['suggested_display_precision'] = 0
             case DeviceClass.POWER:
                 sensor['name'] = f'{name} Usage'
                 sensor['unit_of_measurement'] = '%'
@@ -130,7 +166,7 @@ class Device:
         return sensor
     
 
-    def generate_command_topic(self,device_class,name=None):
+    def generate_command_topic(self,device_class,name=None,callback=None):
         sensor = {}
         sensor['device_class'] = device_class.value
         sensor['name'] = name
@@ -141,9 +177,10 @@ class Device:
         sensor['command_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/set'
         match device_class:
             case DeviceClass.LIGHT:
-                
                 sensor['optimistic'] = True
                 sensor['brightness'] = True  
+            case DeviceClass.SWITCH:
+                sensor['optimistic'] = True
         sensor['schema'] = 'json'
              
         sensor['state_topic'] = f'homeassistant/sensor/{self.device_name}/{sensor_name}/state'
@@ -152,17 +189,22 @@ class Device:
 
 
         del sensor['device_class']
-
+        if callback:
+            if sensor['command_topic'] not in self.callbacks:
+                self.callbacks[sensor['command_topic']] = callback
+                log.debug(f'Adding {sensor["command_topic"]} to callbacks dict')
+            else:
+                log.error(f'Command {sensor["command_topic"]} is already in callbacks dict')
         if sensor_name not in self.command_topics:
             self.command_topics[sensor_name] = sensor
             log.debug(f'Adding {sensor_name} to command_topics dict')
         else:
             log.error(f'Command {sensor_name} is already in command_topics dict')
-        if sensor_name not in self.sensor_topics:
-            self.sensor_topics[sensor_name] = sensor
-            log.debug(f'Adding {sensor_name} to sensor_topics dict')
-        else:
-            log.error(f'Sensor {sensor_name} is already in sensor_topics dict')
+        # if sensor_name not in self.sensor_topics:
+        #     self.sensor_topics[sensor_name] = sensor
+        #     log.debug(f'Adding {sensor_name} to sensor_topics dict')
+        # else:
+        #     log.error(f'Sensor {sensor_name} is already in sensor_topics dict')
 
     def publish_sensor_topics(self):
         for topic in self.sensor_topics:
@@ -177,28 +219,32 @@ class Device:
             
             self.client.publish(sensor_topic['command_topic'].replace('/set','/config'), json.dumps(sensor_topic),retain=True)
             self.client.subscribe(sensor_topic['command_topic'])
+
     def publish_sensor(self,value,name):
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) 
         sensor_name =  re.sub(r'_{2,}','_',sensor_name)
         sensor_topic = self.sensor_topics[sensor_name]
         self.client.publish(sensor_topic['state_topic'], value)
 
-def initialize_bluetooth_batteries():
+def initialize_bluetooth_batteries(client):
+    devices = []
     log.info(f'Inititalizing Bluetooth devices with battery data')
-    bl_batteries = get_bluetooth_battery()
-    log.debug(f'Found {bl_batteries}')
-    for device_name in bl_batteries:
-        battery = bl_batteries[device_name]
-        device = Device(device_name) # Device.generate_device_config(device_name)
-        sensor_topic = device.generate_sensor_topic(DeviceClass.BATTERY)
-        log.info(f'{device_name} at {battery}%')
+    bl_devices = get_bluetooth_battery()
+    log.debug(f'Found {bl_devices}')
+    for bl_device in bl_devices:
+        device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=client)
+        battery = bl_device['battery']
+        device.generate_sensor_topic(DeviceClass.BATTERY)
+        devices.append(device)
+        log.info(f'{bl_device["name"]} at {battery}%')
+    return devices
 
 
 def initialize_pc_sensors(this_pc):
-    log.debug(f'Initializing Disk Sensors')
+    log.debug(f'Initializing Drive Sensors')
     for drive in get_disk_usage_simple():
-        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Free')
-        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Total')
+        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Free')
+        this_pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Total')
     
     log.debug(f'Initializing PC Sensors')
     sensors = ['CPU','GPU','RAM']
@@ -207,49 +253,68 @@ def initialize_pc_sensors(this_pc):
         this_pc.generate_sensor_topic(DeviceClass.POWER,sensor)
 
     this_pc.generate_sensor_topic(DeviceClass.TIMESTAMP,"Boot Time")
+    this_pc.generate_command_topic(DeviceClass.SWITCH,name='Power', callback= lambda payload,device:pc_power(device, status=getPayloadAttr(payload,'status')))
 
+def pc_power(device, status):
+    if status == 'ON':
+        # wake_on_lan()
+        print(f"test  {status}")
+    elif status == 'OFF':
+        global shutdown
+        shutdown = True
+        time.sleep(3)        
+        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=True)
+        sys.exit()
 def publish_pc_disk_sensors(this_pc):
-    log.debug(f'Publishing Disk Sensors')
+    log.debug(f'Publishing Drive Sensors')
     usage = get_disk_usage_simple()
     for drive in usage:
-        this_pc.publish_sensor(usage[drive].free,f'{drive} Free')
-        this_pc.publish_sensor(usage[drive].total,f'{drive} Total')
+        this_pc.publish_sensor(usage[drive].free,f'{drive} Drive Free')
+        this_pc.publish_sensor(usage[drive].total,f'{drive} Drive Total')
 
 def publish_pc_sensors(this_pc):    
     log.debug(f'Publishing PC Sensors')
     sensors = ['CPU','GPU','RAM']
+    global shutdown
     for sensor in sensors:
-        temp = get_pc_sensor(sensor,'Temperature')
-        usage = get_pc_sensor(sensor,'Usage')
-        if temp:
-            this_pc.publish_sensor(temp,f'{sensor} Temperature')
-        if usage:
-            this_pc.publish_sensor(usage,f'{sensor} Usage')
+        try:
+            temp = get_pc_sensor(sensor,'Temperature')
+            usage = get_pc_sensor(sensor,'Usage')
+            if temp is not None:
+                this_pc.publish_sensor(0 if shutdown else temp,f'{sensor} Temperature')
+            if usage is not None:
+                this_pc.publish_sensor(0 if shutdown else usage,f'{sensor} Usage')
+        except Exception as e:
+            log.error(f'Unable to publish {sensor}')
 
 def get_pc_sensor(sensor,type):
+    value = 0
     match sensor:
         case 'CPU':
             match type:
                 case 'Usage':
-                    return get_cpu_load()
+                    value = get_cpu_load()
                 case 'Temperature':
-                    return get_cpu_temperature()
+                    value = get_cpu_temperature()
         case 'GPU':
+            gpus = GPUtil.getGPUs()
+            if len(gpus) > 1:
+                log.error(f'Multiple GPUs not supported yet found ({len(gpus)}), using first')
             match type:
                 case 'Usage':
-                    return None
+                    value = gpus[0].load if len(gpus)>= 1 else None
                 case 'Temperature':
-                    return None
-            print("")
+                    value =  gpus[0].temperature if len(gpus)>= 1 else None
         case 'RAM':
             match type:
                 case 'Usage':
-                    return get_ram_usage()
+                    value = get_ram_usage()
                 case 'Temperature':
-                    return get_ram_temperature()
-    return None
+                    value = get_ram_temperature()
+    value = None if value is None else round(value,3) 
+    return  value
 
-def on_message(client, userdata, message):
+def on_message(client, userdata, message,managed_devices=None):
     if isinstance(message.payload,bytes):
         payload = message.payload.decode()
     try:
@@ -257,62 +322,159 @@ def on_message(client, userdata, message):
     except Exception as e:
         log.debug(f'Non json payload')
     log.info(f'recieved payload {payload}')
-    if message.topic == f"homeassistant/light/m27q/screen_brightness/set":
-        if 'brightness' in payload:
-            value = payload['brightness']
-        else:
-            value = 0
-        log.debug(f"Received command to set screen brightness to {value}")
+    for device in  managed_devices:
+        for callback_topic in device.callbacks:
+            if message.topic == callback_topic:
+                device.callbacks[callback_topic](payload=payload,device=device)
+    # if message.topic == f"homeassistant/light/m27q/screen_brightness/set":
+    #     if 'brightness' in payload:
+    #         value = payload['brightness']
+    #     else:
+    #         value = 0
+    #     log.debug(f"Received command to set screen brightness to {value}")
+
+def runCommand(command,enabled=False):
+    if (command):
+        try:
+            log.debug(f'Running command: {command}' if enabled else 'Running demo: {command}')
+            if enabled:
+                out = subprocess.run(command,capture_output=True)
+                if (out.returncode != 0):
+                    log.warning(f'{out}')
+                log.debug(f'{out}')
+                return json.loads(out.stdout.decode())
+        except Exception as e:
+            log.warning(f'Command Error {e}')
+            return None
+
+def getPayloadAttr(payload,attr,default=0):
+    if attr in payload:
+        return payload[attr]
+    elif attr == 'brightness':
+        return 255 if payload['state'] == 'ON' else 0
+    elif attr == 'status': 
+        return payload
+    else:
+        return default
+    
+def setMonitorInput(monitorName,input):
+    selection = INPUT.DP
+    match input:
+        case 'USB-C':
+            selection = INPUT.USBC
+        case 'HDMI-1':
+            selection = INPUT.HDMI1
+        case 'HDMI-2':
+            selection = INPUT.HDMI2
+        case 'DisplayPort':
+            selection = INPUT.DP
+    global exe_dir
+    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")}  -setVCP --monitor="{monitorName}" --vcp=0x60 --value={selection.value} ',enabled=True)
+
+    
+    log.debug(f"{output}")
+
+def wake_on_lan(mac_address= '2C:F0:5D:A9:51:B9'):
+    # Forming the magic packet to turn on the PC
+    mac_address = mac_address.replace(':', '').replace('-','')
+    magic_packet = 'FF' * 6 + mac_address * 16
+    magic_packet_bytes = bytes.fromhex(magic_packet)
+
+    # Broadcasting the magic packet on the local network
+    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+    sock.connect((socket.gethostbyname(socket.gethostname()), 368))
+    sock.sendto(magic_packet_bytes, ('192.168.1.255', 9))
+    sock.close()
 
 
+def getMonitors(client):
+    monitors = []
+    log.info(f'Initializing Display Monitors')
+    global exe_dir
+    output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")} -getMonitors',enabled=True)
+    if output and 'monitors' in output:
+        output = output['monitors']
+    if output:
+        for m in output:
+            monitor = Device(name=m['model'],model=m['name'],client=client) # Swap name and monitor due to model containing friendlier name and model being unique
+            monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'{os.path.join(exe_dir, "VCPController.exe")} -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
+            monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
+            monitors.append(monitor)
+    return monitors
+
+@retry(times=10,delay=60)
 def main():
     config = setup_config()
     broker =  config['mqtt_ip']
     port = 1883
     client = mqtt.Client()
-    # Set MQTT username and password if required
+    managed_devices = []
+    global exe_dir
+
+    exe_dir = os.path.dirname("C:\Argus\\") #  os.path.dirname(os.path.abspath(__file__))
+
     client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
     client.connect(broker, port)
     client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
     client.on_publish = lambda self, userdata, mid: log.debug(f"Message published with mid {mid}")
     client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
-    client.on_message = on_message
-    
-    monitor1 = Device(name='M27Q',model='M27Q',manufacturer='Gigabyte',client=client) 
-    # monitor2 = Device(name='U2722DE',model='U2722DE',manufacturer='Dell',client=client) 
-    monitor1.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness')
-    monitor1.publish_sensor(name='Screen Brightness',value=json.dumps({"state":'ON','brightness':77}))
-
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='USB-C')
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1')
-    monitor1.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort')
-    
-    
-    monitor1.publish_command_topics()
-    monitor1.publish_sensor("ON",'USB-C')
-    monitor1.publish_sensor("ON",'HDMI-1')
 
     log.info(f'Initializing PC Device')
-    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),mac='58:47:ca:72:46:a0',client=client)
+    net = get_network_info()
+    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),ip=net['IP'],mac=net['MAC'],client=client)
     initialize_pc_sensors(pc)
-    pc.publish_sensor_topics()
 
-    
+    monitors = getMonitors(client=client)
+    bluetooth_devices = initialize_bluetooth_batteries(client)
+    if pc:
+        managed_devices.append(pc)
+    if monitors:
+        managed_devices.extend(monitors)
+    if bluetooth_devices: 
+        managed_devices.extend(bluetooth_devices)
+    for device in managed_devices:
+        device.publish_command_topics()
+        device.publish_sensor_topics()
 
-    threading.Thread(target=client.loop_forever, daemon=True).start()    
+    global shutdown 
+    shutdown = False
+    client.on_message = functools.partial(on_message,managed_devices=managed_devices)
+    listen_thread = threading.Thread(target=client.loop_forever, daemon=True)
+    listen_thread.start()    
     log.info(f'Sending Sensor data on loop...')
     counter  = 0
+    exception_count = 0
     while True:
         try:
-            if counter % 15 == 0:
+            if shutdown:
+                listen_thread.join()
                 publish_pc_sensors(pc)
-            if counter % 60*15 == 0:
-                publish_pc_disk_sensors(pc)
-                pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
+                exit()
+            else:
+                if counter % 45 == 0:
+                    publish_pc_sensors(pc)
+                if counter % (60*45) == 0:
+                    publish_pc_disk_sensors(pc)
+                    pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
+                    bl_batteries = get_bluetooth_battery()
+
+                    for bl_device in bluetooth_devices:
+                        for battery_info in bl_batteries:
+                            if battery_info['name'] == bl_device.name:
+                                battery = battery_info['battery']
+                                bl_device.publish_sensor(battery, "Battery Level")
             time.sleep(1)
         except Exception as e:
-            log.error(e)
+            exception_count += 1
+            log.error(f'[Exeption.{exception_count}]: {e}')
+            if exception_count > 3:
+                raise f'Too many exceptions, restart required'
         counter+=1
+
 if __name__ == '__main__':
     main()
 
