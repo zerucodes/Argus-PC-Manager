@@ -298,7 +298,7 @@ def pc_power(device, status):
         shutdown = True
         publish_pc_sensors(device)
         time.sleep(3)        
-        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=False)
+        runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=True)
         sys.exit()
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
