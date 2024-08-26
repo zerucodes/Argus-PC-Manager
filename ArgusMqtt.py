@@ -15,6 +15,7 @@ import functools
 import socket
 import GPUtil
 import os,sys,traceback
+from  xinputBattery import *
 
 def setup_logger():
     # Setup Logging:
@@ -39,6 +40,7 @@ setup_logger()
 log = logging.getLogger()
 
 
+from  xinputBattery import *
 def retry(times,delay=1):
     def decorator(func):
         @functools.wraps(func)
@@ -273,6 +275,11 @@ def initialize_bluetooth_batteries(client):
         log.error(f'{e}')
     return devices
 
+def initialize_dummy_device(client, deviceName):
+    device = Device(name=deviceName, client=client)
+    device.generate_sensor_topic(DeviceClass.BATTERY)
+
+    return device
 
 def initialize_pc_sensors(this_pc):
     log.debug(f'Initializing Drive Sensors')
@@ -321,6 +328,7 @@ def publish_pc_sensors(this_pc):
                 this_pc.publish_sensor(0 if shutdown else usage,f'{sensor} Usage')
         except Exception as e:
             log.error(f'Unable to publish {sensor}: {e}')
+
 
 def get_pc_sensor(sensor,type):
     value = 0
@@ -483,9 +491,14 @@ def main():
         managed_devices.extend(monitors)
     if bluetooth_devices: 
         managed_devices.extend(bluetooth_devices)
+    if get_xinput_battery_level():
+        xbox_controller = initialize_dummy_device(deviceName="XBox Controller", client=client)
+        managed_devices.append(xbox_controller)
     for device in managed_devices:
         device.publish_command_topics()
         device.publish_sensor_topics()
+
+
 
     global shutdown 
     shutdown = False
@@ -504,6 +517,10 @@ def main():
             else:
                 if counter % 45 == 0:
                     publish_pc_sensors(pc)
+                    xbox_battery = get_xinput_battery_level()
+                    if xbox_battery:
+                        log.info(f'Publishing Xbox Battery at {xbox_battery}%')
+                        xbox_controller.publish_sensor(xbox_battery,"Battery Level")
                 if counter % (60*45) == 0:
                     publish_pc_disk_sensors(pc)
                     pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  

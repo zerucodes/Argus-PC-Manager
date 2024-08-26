@@ -233,11 +233,11 @@ def get_bluetooth_battery():
     )
     if result.returncode != 0:
         raise Exception(f"Error executing PowerShell: {result.stderr}")
+    r = result.stdout
     try:
-        r = result.stdout
         return json.loads(r)
-    except:
-        return None
+    except Exception:
+        return []
     
 def get_last_boot():
 
