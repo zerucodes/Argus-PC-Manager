@@ -15,20 +15,20 @@ import functools
 import socket
 import GPUtil
 import os,sys,traceback
-from  xinputBattery import *
 
 def setup_logger():
     # Setup Logging:
+    level = logging.DEBUG
     log = logging.getLogger()
-    log.setLevel(logging.DEBUG)
+    log.setLevel(level)
 
-    file_handler = TimedRotatingFileHandler(f'C:\\Temp\\argusmqtt_{datetime.now().strftime("%Y-%m-%d")}.log', when='midnight', interval=1, backupCount=5)
-    file_handler.setLevel(logging.DEBUG)
+    file_handler = TimedRotatingFileHandler(f'C:\\Temp\\Argus\\argusmqtt_{datetime.now().strftime("%Y-%m-%d")}.log', when='midnight', interval=1, backupCount=5)
+    file_handler.setLevel(level)
     file_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(funcName)s: %(message)s'))
     file_handler.suffix = "%Y-%m-%d"
     # Create a console handler that logs messages to the console
     console_handler = logging.StreamHandler()
-    console_handler.setLevel(logging.DEBUG)
+    console_handler.setLevel(level)
     console_handler.setFormatter(logging.Formatter('%(asctime)s [%(levelname)s] %(funcName)s: %(message)s'))
 
     # Add both handlers to the logger
@@ -40,7 +40,6 @@ setup_logger()
 log = logging.getLogger()
 
 
-from  xinputBattery import *
 def retry(times,delay=1):
     def decorator(func):
         @functools.wraps(func)
@@ -59,7 +58,6 @@ def retry(times,delay=1):
         return wrapper
     return decorator
 
-
 def setup_config():
     config = None
     version = '2.0.0'
@@ -73,12 +71,12 @@ def setup_config():
     # Set up config
     if yaml is not None:
         try:
-            with open('mqtt.yaml') as config_file:
+            with open('C:\\Argus\\\mqtt.yaml') as config_file:
                 config = yaml.safe_load(config_file)
                 log.debug(f'Using config at {config_file}')
         except FileNotFoundError:
             try:
-                with open(r'C:\\Argus\\\mqtt.yaml') as config_file:
+                with open('C:\\Argus\\\mqtt.yaml') as config_file:
                     config = yaml.safe_load(config_file)
                     log.debug(f'Using config at {config_file}')
             except FileNotFoundError:
@@ -88,9 +86,10 @@ def setup_config():
     # If yaml module isn't available or config file isn't found, assign default values
     if config is None:
         log.debug(f'Using default config in demo mode')
+        
         config = {
-            "mqtt_username": "argus",
-            "mqtt_password": "##########",
+            "mqtt_username": input('Mqtt Username: '),
+            "mqtt_password": input("Mqtt password: "),
             "cmmExe": "ControlMyMonitor.exe",
             "enabled": False
         }
@@ -115,6 +114,52 @@ class DeviceClass(Enum):
     TIMESTAMP = 'timestamp'
     BUTTON = 'button'
     SWITCH = 'switch'
+
+@DeprecationWarning
+class Sensor:
+    def  __init__(self, entityClass=None,name=None,message=None, callback=None ):
+        sensor = {}
+        sensor['device_class'] = entityClass.value
+        sensor['name'] = name
+
+        match entityClass:
+            case DeviceClass.BATTERY:
+                sensor['name'] = 'Battery Level'
+                sensor['unit_of_measurement'] = '%'           
+            case 'power':
+                log.debug('TBD')
+            case DeviceClass.DATA_SIZE:
+                if name:
+                    sensor['entity_category'] = 'diagnostic'
+                    sensor['unit_of_measurement'] = 'B'
+                    sensor['suggested_display_precision'] = 0
+            case DeviceClass.POWER:
+                sensor['name'] = f'{name} Usage'
+                sensor['unit_of_measurement'] = '%'
+                del sensor['device_class']
+            case DeviceClass.TEMPERATURE:
+                sensor['name'] = f'{name} Temperature'
+                sensor['unit_of_measurement'] = '°C'
+            case DeviceClass.TIMESTAMP:
+                sensor['entity_category'] = 'diagnostic'
+                sensor['value_template']  = '{{ value | int | timestamp_local | as_datetime  }}'
+
+        sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower())
+        sensor_name =  re.sub(r'_{2,}','_',sensor_name) # duplicate  _ chars
+        
+        sensor['state_topic'] = f'homeassistant/sensor/{self.device_name}/{sensor_name}/state'
+        sensor['unique_id'] = f"{self.device_name}_{sensor_name}"   
+        sensor['device'] = self.config
+
+        if 'unit_of_measurement' in sensor and sensor['unit_of_measurement']  == '%':
+            sensor['suggested_display_precision'] = 2
+
+        if callback: self.callback = callback
+        self.sensor = sensor
+        return sensor
+    
+    def publish(self):
+        return self.sensor['name'], json.dumps(self.sensor['state_topic'])
 class Device:
 
     def __init__(self, name, model=None,manufacturer=None,mac=None,ip=None,bluetooth=None,client=None):
@@ -131,6 +176,13 @@ class Device:
         self.command_topics = {}
         self.client = client
         self.callbacks = {}
+        self.state_callbacks = {}
+        self.state_intervals = {}
+    def __str__(self):
+        return (f"Device(name={self.name}, model={self.model}, manufacturer={self.manufacturer}, "
+                f"mac={self.mac}, ip={self.ip}, bluetooth={self.bluetooth}, client={self.client}, "
+                f"device_name={self.device_name}, identifiers={self.identifiers})")
+    
     def set_config(self):
         config =  {
             "name" : self.name
@@ -139,19 +191,14 @@ class Device:
             config['connections'] = []
         else:
             config['identifiers'] = self.identifiers
-        if self.manufacturer:
-            config["manufacturer"] = self.manufacturer
-        if self.model:
-            config["model"] = self.model
-        if self.mac:
-            config['connections'].append(['mac',self.mac])
-        if self.ip:
-            config['connections'].append(['ip',self.ip])
-        if self.bluetooth:
-            config['connections'].append(['bluetooth',self.bluetooth])
+        if self.manufacturer: config["manufacturer"] = self.manufacturer
+        if self.model: config["model"] = self.model
+        if self.mac: config['connections'].append(['mac',self.mac])
+        if self.ip: config['connections'].append(['ip',self.ip])
+        if self.bluetooth: config['connections'].append(['bluetooth',self.bluetooth])
         self.config = config
     
-    def generate_sensor_topic(self,device_class,name=None,message=None):
+    def generate_sensor_topic(self,device_class,name=None,message=None, callback=None,update_interval=15):
         sensor = {}
         sensor['device_class'] = device_class.value
         sensor['name'] = name
@@ -177,7 +224,7 @@ class Device:
                 sensor['entity_category'] = 'diagnostic'
                 sensor['value_template']  = '{{ value | int | timestamp_local | as_datetime  }}'
 
-
+        
 
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower()) #  battery_level
         sensor_name =  re.sub(r'_{2,}','_',sensor_name) # duplicate  _ chars
@@ -186,6 +233,9 @@ class Device:
         sensor['unique_id'] = f"{self.device_name}_{sensor_name}"  #  zeru_pc_battery_level
         sensor['device'] = self.config
 
+        if callback and sensor['state_topic'] not in self.state_callbacks:
+            self.state_callbacks[sensor['state_topic']] = callback
+            self.state_intervals[sensor['state_topic']] = update_interval
         if 'unit_of_measurement' in sensor and sensor['unit_of_measurement']  == '%':
             sensor['suggested_display_precision'] = 2
         # Some values are only for some
@@ -205,7 +255,7 @@ class Device:
 
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower()) #  battery_level
         sensor_name =  re.sub(r'_{2,}','_',sensor_name) # duplicate  _ chars
-        sensor['state_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/state'
+        # sensor['state_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/state'
         sensor['command_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/set'
         match device_class:
             case DeviceClass.LIGHT:
@@ -242,22 +292,23 @@ class Device:
         for topic in self.sensor_topics:
             sensor_topic = self.sensor_topics[topic]
             log.debug(f'Publishing topic: {topic} : {sensor_topic}')
-            self.client.publish(sensor_topic['state_topic'].replace('/state','/config'), json.dumps(sensor_topic),retain=True)
+            self.client.publish(sensor_topic['state_topic'].replace('/state','/config'), json.dumps(sensor_topic))
             
     def publish_command_topics(self):
         for topic in self.command_topics:
             sensor_topic = self.command_topics[topic]
             log.debug(f'Publishing topic: {topic} : {sensor_topic}')
             
-            self.client.publish(sensor_topic['command_topic'].replace('/set','/config'), json.dumps(sensor_topic),retain=True)
+            self.client.publish(sensor_topic['command_topic'].replace('/set','/config'), json.dumps(sensor_topic))
             self.client.subscribe(sensor_topic['command_topic'])
 
     def publish_sensor(self,value,name):
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', name.lower()) 
         sensor_name =  re.sub(r'_{2,}','_',sensor_name)
         sensor_topic = self.sensor_topics[sensor_name]
-        self.client.publish(sensor_topic['state_topic'], value)
+        self.client.publish(sensor_topic['state_topic'], value, retain=True)
 
+@DeprecationWarning
 def initialize_bluetooth_batteries(client):
     devices = []
     try:
@@ -275,12 +326,7 @@ def initialize_bluetooth_batteries(client):
         log.error(f'{e}')
     return devices
 
-def initialize_dummy_device(client, deviceName):
-    device = Device(name=deviceName, client=client)
-    device.generate_sensor_topic(DeviceClass.BATTERY)
-
-    return device
-
+@DeprecationWarning
 def initialize_pc_sensors(this_pc):
     log.debug(f'Initializing Drive Sensors')
     for drive in get_disk_usage_simple():
@@ -307,6 +353,7 @@ def pc_power(device, status):
         time.sleep(3)        
         runCommand(command="C:\\Windows\\System32\\shutdown.exe -s -t 0",enabled=True)
         sys.exit()
+
 def publish_pc_disk_sensors(this_pc):
     log.debug(f'Publishing Drive Sensors')
     usage = get_disk_usage_simple()
@@ -314,6 +361,14 @@ def publish_pc_disk_sensors(this_pc):
         this_pc.publish_sensor(usage[drive].free,f'{drive} Drive Free')
         this_pc.publish_sensor(usage[drive].total,f'{drive} Drive Total')
 
+def get_disk_remaining(total=False, drive=None):
+    usage = get_disk_usage_simple(drive) 
+    if drive is None:
+        return usage.total if total else usage.free
+    else:
+        return usage[drive].total if total else usage[drive].free
+    
+@DeprecationWarning
 def publish_pc_sensors(this_pc):    
     log.debug(f'Publishing PC Sensors')
     sensors = ['CPU','GPU','RAM']
@@ -369,6 +424,7 @@ def get_pc_sensor(sensor,type):
 
     return  value
 
+@DeprecationWarning
 def on_message(client, userdata, message,managed_devices=None):
     if isinstance(message.payload,bytes):
         payload = message.payload.decode()
@@ -396,7 +452,7 @@ def runCommand(command,enabled=False):
                 out = subprocess.run(command,capture_output=True)
                 if (out.returncode != 0):
                     log.warning(f'{out}')
-                log.debug(f'{out}')
+                # log.debug(f'{out}')
                 return json.loads(out.stdout.decode())
         except Exception as e:
             log.warning(f'Command Error {e}')
@@ -425,8 +481,6 @@ def setMonitorInput(monitorName,input):
             selection = INPUT.DP
     global exe_dir
     output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")}  -setVCP --monitor="{monitorName}" --vcp=0x60 --value={selection.value} ',enabled=True)
-
-    
     log.debug(f"{output}")
 
 def wake_on_lan(mac_address= '2C:F0:5D:A9:51:B9'):
@@ -442,7 +496,7 @@ def wake_on_lan(mac_address= '2C:F0:5D:A9:51:B9'):
     sock.sendto(magic_packet_bytes, ('192.168.1.255', 9))
     sock.close()
 
-
+@DeprecationWarning
 def getMonitors(client):
     monitors = []
     log.info(f'Initializing Display Monitors')
@@ -459,85 +513,166 @@ def getMonitors(client):
             monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
             monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
             monitors.append(monitor)
+    log.info(f'Created {len(monitors)} monitors')
     return monitors
+
+class MQTTMgr:
+    
+    _last_cache = 0
+    _cache_duration = 600
+    global shutdown
+    shutdown = False
+
+    def __init__(self):
+        log.debug("todo")
+        self.devices = []
+  
+        self.battery_cache = []
+    
+    def setup(self, broker, port, username, passsword):
+        self.client = mqtt.Client()
+        self.client.username_pw_set(username, passsword)
+        self.client.connect(broker, port)
+        self.client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
+        self.client.on_publish = lambda self, userdata, mid: log.debug(f"Message published with mid {mid}")
+        self.client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
+        
+        self.start_listener()
+
+        global exe_dir
+
+        exe_dir = os.path.dirname("C:\Argus\\")
+
+    def add_device(self, new_devices):
+        if isinstance(new_devices,list):
+            for device in new_devices:
+                if device not in self.devices:
+                    self.devices.append(device)
+                    log.info(f'Added new device: {device}')
+        elif new_devices not in self.devices:
+            self.devices.append(device)
+    
+    def initialize_pc(self):
+        net = get_network_info()
+        pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),ip=net['IP'],mac=net['MAC'],client=self.client)
+        log.debug(f'Initializing PC Drive Sensors')
+        for drive in get_disk_usage_simple():
+            pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Free', callback= lambda drive=drive: get_disk_remaining(total=False,drive=drive),update_interval=120 )
+            pc.generate_sensor_topic(DeviceClass.DATA_SIZE,f'{drive} Drive Total', callback= lambda drive=drive: get_disk_remaining(total=True,drive=drive) ,update_interval=120)
+        
+        log.debug(f'Initializing PC Sensors')
+        sensors = ['CPU','GPU','RAM']
+        for sensor in sensors:
+            pc.generate_sensor_topic(DeviceClass.TEMPERATURE,sensor,callback= lambda sensor=sensor: get_pc_sensor(sensor,'Temperature'),update_interval=15)
+            pc.generate_sensor_topic(DeviceClass.POWER,sensor, callback= lambda sensor=sensor: get_pc_sensor(sensor,'Usage'),update_interval=15)
+
+        pc.generate_sensor_topic(DeviceClass.TIMESTAMP,"Boot Time", callback= lambda: int(get_last_boot().timestamp()) ,update_interval=240)
+        pc.generate_command_topic(DeviceClass.SWITCH,name='Power', callback= lambda payload,device:pc_power(device, status=getPayloadAttr(payload,'status')))
+        self.devices.append(pc)
+        return pc
+
+    def initialize_monitors(self):
+        monitors = []
+        log.info(f'Initializing Display Monitors')
+        global exe_dir
+        output = runCommand(f'{os.path.join(exe_dir, "VCPController.exe")} -getMonitors',enabled=True)
+        if output and 'monitors' in output:
+            output = output['monitors']
+        if output:
+            for m in output:
+                monitor = Device(name=m['model'],model=m['name'],client=self.client) # Swap name and monitor due to model containing friendlier name and model being unique
+                monitor.generate_command_topic(DeviceClass.LIGHT,name='Screen Brightness',callback= lambda payload,device:runCommand(enabled=True, command=f'{os.path.join(exe_dir, "VCPController.exe")} -setVCP --vcp=0x10 --value={int(getPayloadAttr(payload,"brightness",0)/255*100 )} --monitor="{device.model}"'))
+                monitor.generate_command_topic(DeviceClass.BUTTON,name='USB-C', callback= lambda device,payload=None:setMonitorInput(device.model,'USB-C'))
+                monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-1', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-1'))
+                monitor.generate_command_topic(DeviceClass.BUTTON,name='HDMI-2', callback= lambda device,payload=None:setMonitorInput(device.model,'HDMI-2'))
+                monitor.generate_command_topic(DeviceClass.BUTTON,name='DisplayPort', callback= lambda device,payload=None:setMonitorInput(device.model,'DisplayPort'))
+                monitors.append(monitor)
+
+        log.info(f'Created {len(monitors)} monitors')
+        self.add_device(monitors)
+        return  monitors
+
+    def helper_get_bt_battery(self,name):
+        if not (self.battery_cache or (time.time() - self._last_cache) < self._cache_duration):
+            self.battery_cache = get_bluetooth_battery()
+
+        for bl_device in  self.battery_cache:
+            if  bl_device['name'] == name:
+                return bl_device['battery']
+        return None
+    
+    def initialize_bluetooth_batteries(self):
+        devices = []
+        try:
+            log.info(f'Inititalizing Bluetooth devices with battery data')
+            
+            if self.battery_cache or (time.time() - self._last_cache) < self._cache_duration:
+                log.debug(f'Found {self.battery_cache}')
+            else:
+                self.battery_cache = get_bluetooth_battery()
+            for bl_device in self.battery_cache:
+                device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=self.client)
+                battery = bl_device['battery']
+                device.generate_sensor_topic(DeviceClass.BATTERY, callback= lambda :self.helper_get_bt_battery(bl_device['name']),update_interval=300)
+                devices.append(device)
+                log.info(f'{bl_device["name"]} at {battery}%')
+        except Exception as e:
+            log.error(f'{e}')
+
+        self.add_device(devices)
+        return devices
+    
+    def publish_all_topics(self):
+        for device in self.devices:
+            device.publish_command_topics()
+            device.publish_sensor_topics()
+
+    def start_listener(self):
+        self.client.on_message = functools.partial(self.on_message)
+        self.listen_thread = threading.Thread(target=self.client.loop_forever, daemon=True)
+        self.listen_thread.start()    
+
+    def on_message(self,client, userdata, message):
+        if isinstance(message.payload,bytes):
+            payload = message.payload.decode()
+        try:
+            payload = json.loads(message.payload)
+        except Exception as e:
+            log.debug(f'Non json payload')
+        log.info(f'recieved payload {payload}')
+        for device in self.devices:
+            for callback_topic in device.callbacks:
+                if message.topic == callback_topic:
+                    device.callbacks[callback_topic](payload=payload,device=device)
+
+    def publish_all_sensors(self, index):
+        for device in self.devices:
+            for callback in device.state_callbacks:
+                if index % device.state_intervals[callback]  == 0:
+                    try:
+                        val = device.state_callbacks[callback]()
+                        log.debug(f'callback: {callback} > {val}')
+                        self.client.publish(callback,val, retain=True)
+                    except Exception as e:
+                        log.error(f'{callback} failed')
+
 
 @retry(times=10,delay=60)
 def main():
+
+    mgr = MQTTMgr()
     config = setup_config()
-    broker =  config['mqtt_ip']
-    port = 1883
-    client = mqtt.Client()
-    managed_devices = []
-    global exe_dir
-
-    exe_dir = os.path.dirname("C:\Argus\\") #  os.path.dirname(os.path.abspath(__file__))
-
-    client.username_pw_set(config['mqtt_username'], config['mqtt_password'])
-    client.connect(broker, port)
-    client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
-    client.on_publish = lambda self, userdata, mid: log.debug(f"Message published with mid {mid}")
-    client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
-
-    log.info(f'Initializing PC Device')
-    net = get_network_info()
-    pc = Device(name=get_hw_attr('name'),model=get_hw_attr('model'),manufacturer=get_hw_attr('manufacturer'),ip=net['IP'],mac=net['MAC'],client=client)
-    initialize_pc_sensors(pc)
-
-    monitors = getMonitors(client=client)
-    bluetooth_devices = initialize_bluetooth_batteries(client)
-    if pc:
-        managed_devices.append(pc)
-    if monitors:
-        managed_devices.extend(monitors)
-    if bluetooth_devices: 
-        managed_devices.extend(bluetooth_devices)
-    if get_xinput_battery_level():
-        xbox_controller = initialize_dummy_device(deviceName="XBox Controller", client=client)
-        managed_devices.append(xbox_controller)
-    for device in managed_devices:
-        device.publish_command_topics()
-        device.publish_sensor_topics()
-
-
-
-    global shutdown 
-    shutdown = False
-    client.on_message = functools.partial(on_message,managed_devices=managed_devices)
-    listen_thread = threading.Thread(target=client.loop_forever, daemon=True)
-    listen_thread.start()    
-    log.info(f'Sending Sensor data on loop...')
-    counter  = 0
-    exception_count = 0
+    mgr.setup(config['mqtt_ip'], 1883, config['mqtt_username'],config['mqtt_password'])
+    mgr.initialize_monitors()
+    mgr.initialize_pc()
+    mgr.initialize_bluetooth_batteries()
+    mgr.publish_all_topics()
+    index = 0
     while True:
-        try:
-            if shutdown:
-                listen_thread.join()
-                publish_pc_sensors(pc)
-                sys.exit()
-            else:
-                if counter % 45 == 0:
-                    publish_pc_sensors(pc)
-                    xbox_battery = get_xinput_battery_level()
-                    if xbox_battery:
-                        log.info(f'Publishing Xbox Battery at {xbox_battery}%')
-                        xbox_controller.publish_sensor(xbox_battery,"Battery Level")
-                if counter % (60*45) == 0:
-                    publish_pc_disk_sensors(pc)
-                    pc.publish_sensor(int(get_last_boot().timestamp())  ,"Boot Time")  
-                    bl_batteries = get_bluetooth_battery()
+        mgr.publish_all_sensors(index=index)
+        time.sleep(1)
+        index+=1
 
-                    for bl_device in bluetooth_devices:
-                        for battery_info in bl_batteries:
-                            if battery_info['name'] == bl_device.name:
-                                battery = battery_info['battery']
-                                bl_device.publish_sensor(battery, "Battery Level")
-            time.sleep(1)
-        except Exception as e:
-            exception_count += 1
-            log.error(f'[Exeption.{exception_count}]: {e} {e.__traceback__.tb_lineno} {traceback.format_exc()}')
-            if exception_count > 3:
-                raise f'Too many exceptions, restart required'
-        counter+=1
 
 if __name__ == '__main__':
     main()
