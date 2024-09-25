@@ -137,12 +137,16 @@ def get_disk_usage():
 
     return disk_usage_dict
 
-def get_disk_usage_simple():
+def get_disk_usage_simple(driveLetter=None):
     disk_usage_dict = {}
-    for drive_letter in range(ord('A'), ord('Z')+1):
-        drive = chr(drive_letter) + ':'
-        if os.path.exists(drive):
-            disk_usage_dict[drive] = shutil.disk_usage(drive)
+    if driveLetter:
+        if os.path.exists(driveLetter):
+            disk_usage_dict[driveLetter] = shutil.disk_usage(driveLetter)
+    else:
+        for drive_letter in range(ord('A'), ord('Z')+1):
+            drive = chr(drive_letter) + ':'
+            if os.path.exists(drive):
+                disk_usage_dict[drive] = shutil.disk_usage(drive)
     return disk_usage_dict
 
 class log:
@@ -233,11 +237,11 @@ def get_bluetooth_battery():
     )
     if result.returncode != 0:
         raise Exception(f"Error executing PowerShell: {result.stderr}")
-    r = result.stdout
     try:
+        r = result.stdout
         return json.loads(r)
-    except Exception:
-        return []
+    except:
+        return None
     
 def get_last_boot():
 
