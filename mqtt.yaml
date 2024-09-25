@@ -1,0 +1,5 @@
+mqtt_username : "mqtt"
+mqtt_password : "Mqtt***REMOVED***"
+mqtt_ip : "192.168.1.101"
+cmmExe : "ControlMyMonitor.exe"
+enabled : True
