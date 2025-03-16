@@ -18,7 +18,7 @@ import os,sys,traceback
 
 def setup_logger():
     # Setup Logging:
-    level = logging.DEBUG
+    level = logging.INFO
     log = logging.getLogger()
     log.setLevel(level)
 
@@ -93,8 +93,7 @@ def setup_config():
             "cmmExe": "ControlMyMonitor.exe",
             "enabled": False
         }
-
-    log.info(f'Launching Argus v{version}...')
+    log.info(f'\n{"*"*50}\nLaunching Argus v{version}\n{"*"*50}\n')
     log.info(f'Latest feature: {featurecomment}')
     log.debug(f'Is Admin: {ctypes.windll.shell32.IsUserAnAdmin() != 0}')    
     log.debug(f'Config: {str(config)}')
@@ -202,6 +201,7 @@ class Device:
         sensor = {}
         sensor['device_class'] = device_class.value
         sensor['name'] = name
+
         match device_class:
             case DeviceClass.BATTERY:
                 sensor['name'] = 'Battery Level'
@@ -222,9 +222,8 @@ class Device:
                 sensor['unit_of_measurement'] = '°C'
             case DeviceClass.TIMESTAMP:
                 sensor['entity_category'] = 'diagnostic'
-                sensor['value_template']  = '{{ value | int | timestamp_local | as_datetime  }}'
+                sensor['value_template']  = '{{ value | int | timestamp_local | as_datetime }}'
 
-        
 
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower()) #  battery_level
         sensor_name =  re.sub(r'_{2,}','_',sensor_name) # duplicate  _ chars
@@ -238,6 +237,8 @@ class Device:
             self.state_intervals[sensor['state_topic']] = update_interval
         if 'unit_of_measurement' in sensor and sensor['unit_of_measurement']  == '%':
             sensor['suggested_display_precision'] = 2
+        if 'unit_of_measurement' in sensor:
+            sensor['state_class'] = 'measurement'
         # Some values are only for some
 
         if sensor_name not in self.sensor_topics:
@@ -255,7 +256,6 @@ class Device:
 
         sensor_name = re.sub(r'[^a-zA-Z0-9]', '_', sensor["name"].lower()) #  battery_level
         sensor_name =  re.sub(r'_{2,}','_',sensor_name) # duplicate  _ chars
-        # sensor['state_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/state'
         sensor['command_topic'] = f'homeassistant/{sensor["device_class"]}/{self.device_name}/{sensor_name}/set'
         match device_class:
             case DeviceClass.LIGHT:
@@ -282,11 +282,6 @@ class Device:
             log.debug(f'Adding {sensor_name} to command_topics dict')
         else:
             log.error(f'Command {sensor_name} is already in command_topics dict')
-        # if sensor_name not in self.sensor_topics:
-        #     self.sensor_topics[sensor_name] = sensor
-        #     log.debug(f'Adding {sensor_name} to sensor_topics dict')
-        # else:
-        #     log.error(f'Sensor {sensor_name} is already in sensor_topics dict')
 
     def publish_sensor_topics(self):
         for topic in self.sensor_topics:
@@ -437,12 +432,6 @@ def on_message(client, userdata, message,managed_devices=None):
         for callback_topic in device.callbacks:
             if message.topic == callback_topic:
                 device.callbacks[callback_topic](payload=payload,device=device)
-    # if message.topic == f"homeassistant/light/m27q/screen_brightness/set":
-    #     if 'brightness' in payload:
-    #         value = payload['brightness']
-    #     else:
-    #         value = 0
-    #     log.debug(f"Received command to set screen brightness to {value}")
 
 def runCommand(command,enabled=False):
     if (command):
@@ -519,21 +508,21 @@ def getMonitors(client):
 class MQTTMgr:
     
     _last_cache = 0
-    _cache_duration = 600
+    _cache_duration = 300
     global shutdown
     shutdown = False
 
     def __init__(self):
-        log.debug("todo")
         self.devices = []
   
         self.battery_cache = []
     
-    def setup(self, broker, port, username, passsword):
-        self.client = mqtt.Client()
-        self.client.username_pw_set(username, passsword)
-        self.client.connect(broker, port)
-        self.client.on_connect = lambda self, userdata, flags, rc: log.debug(f"Connected with result code {rc}")
+    def setup(self, broker, port, username, password):
+        # self.client = mqtt.Client()
+        # self.client.username_pw_set(username, password)
+        # self.client.connect(broker, port)
+        self.connect_mqtt(broker, port, username, password)
+        self.client.on_connect = lambda self, userdata, flags, rc: log.info(f"Connected with result code {rc}")
         self.client.on_publish = lambda self, userdata, mid: log.debug(f"Message published with mid {mid}")
         self.client.on_subscribe = lambda self, userdata, mid, granted_qos: log.debug(f"Subscribed with mid {mid} and QoS {granted_qos}")
         
@@ -543,6 +532,24 @@ class MQTTMgr:
 
         exe_dir = os.path.dirname("C:\Argus\\")
 
+    def connect_mqtt(self, broker, port, username, password, keepalive=60):
+        while True:
+            try:
+                self.client = mqtt.Client()
+                self.client.username_pw_set(username, password)
+                result_code = self.client.connect(broker, port, keepalive)
+                
+                if result_code == 0:
+                    log.info("Connected successfully!")
+                    return True
+                else:
+                    log.error("Connection failed with code:", result_code)
+            except Exception as e:
+                log.exception("Error while connecting:", e)
+            
+            log.info("Retrying in 60 seconds...")
+            time.sleep(60)
+            
     def add_device(self, new_devices):
         if isinstance(new_devices,list):
             for device in new_devices:
@@ -593,27 +600,35 @@ class MQTTMgr:
         return  monitors
 
     def helper_get_bt_battery(self,name):
-        if not (self.battery_cache or (time.time() - self._last_cache) < self._cache_duration):
+        if  (not self.battery_cache or (time.time() - self._last_cache) > self._cache_duration):
+            log.debug(f'Refreshing bt battery data...')
             self.battery_cache = get_bluetooth_battery()
-
+            self._last_cache = time.time()
+        # if self.battery_cache and self.battery_cache["name"] == name  and bl_device['battery']:
+        #     return bl_device['battery']
         for bl_device in  self.battery_cache:
             if  bl_device['name'] == name:
+                log.debug(f'{bl_device["name"]} at {bl_device["battery"]}%')
                 return bl_device['battery']
         return None
     
     def initialize_bluetooth_batteries(self):
         devices = []
         try:
-            log.info(f'Inititalizing Bluetooth devices with battery data')
-            
-            if self.battery_cache or (time.time() - self._last_cache) < self._cache_duration:
-                log.debug(f'Found {self.battery_cache}')
-            else:
-                self.battery_cache = get_bluetooth_battery()
+            log.info(f'Inititalizing Bluetooth devices with battery data...')
+
+            self.battery_cache = get_bluetooth_battery()
+            self._last_cache = time.time()
             for bl_device in self.battery_cache:
                 device = Device(name=bl_device['name'],bluetooth=bl_device['mac'],client=self.client)
                 battery = bl_device['battery']
-                device.generate_sensor_topic(DeviceClass.BATTERY, callback= lambda :self.helper_get_bt_battery(bl_device['name']),update_interval=300)
+                device_name = bl_device['name']
+                device.generate_sensor_topic(
+                    DeviceClass.BATTERY,
+                    callback=lambda n=device_name: self.helper_get_bt_battery(n),
+                    update_interval=10
+                )
+                # device.generate_sensor_topic(DeviceClass.BATTERY, callback= lambda device:self.helper_get_bt_battery(bl_device['name']),update_interval=300)
                 devices.append(device)
                 log.info(f'{bl_device["name"]} at {battery}%')
         except Exception as e:
@@ -659,7 +674,6 @@ class MQTTMgr:
 
 @retry(times=10,delay=60)
 def main():
-
     mgr = MQTTMgr()
     config = setup_config()
     mgr.setup(config['mqtt_ip'], 1883, config['mqtt_username'],config['mqtt_password'])
