@@ -8,7 +8,9 @@ import wmi
 import time
 import datetime
 import subprocess
-import  psutil
+import psutil
+import socket
+
 def get_size(bytes, suffix="B"):
     factor = 1024
     for unit in ["", "K", "M", "G", "T", "P"]:
@@ -135,12 +137,16 @@ def get_disk_usage():
 
     return disk_usage_dict
 
-def get_disk_usage_simple():
+def get_disk_usage_simple(driveLetter=None):
     disk_usage_dict = {}
-    for drive_letter in range(ord('A'), ord('Z')+1):
-        drive = chr(drive_letter) + ':'
-        if os.path.exists(drive):
-            disk_usage_dict[drive] = shutil.disk_usage(drive)
+    if driveLetter:
+        if os.path.exists(driveLetter):
+            disk_usage_dict[driveLetter] = shutil.disk_usage(driveLetter)
+    else:
+        for drive_letter in range(ord('A'), ord('Z')+1):
+            drive = chr(drive_letter) + ':'
+            if os.path.exists(drive):
+                disk_usage_dict[drive] = shutil.disk_usage(drive)
     return disk_usage_dict
 
 class log:
@@ -208,13 +214,21 @@ def get_battery_level(friendly_name):
 
 def get_bluetooth_battery():
     bt_command = '''
+    $devices = @()
     $bl = Get-PnpDevice -FriendlyName "*"  -Class Bluetooth
-        $bl | ForEach-Object {
-            $battery = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2"  | Where-Object Type -ne 'Empty' 
-            if ($battery.Data) {
-                Write-Host "$($_.FriendlyName),,,$($battery.Data)"
+    $bl | ForEach-Object {
+        $battery = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{104EA319-6EE2-4701-BD47-8DDBF425BBE5} 2"  | Where-Object Type -ne 'Empty' 
+        if ($battery.Data) {
+            $mac = Get-PnpDeviceProperty -InstanceId $_.InstanceId  -KeyName "{A35996AB-11CF-4935-8B61-A6761081ECDF} 12"  | Where-Object Type -ne 'Empty' 
+            $device = @{name = $_.FriendlyName
+            battery = $battery.Data
+            mac =$mac.Data 
             }
+            $devices += $device
         }
+    }
+
+    Write-Host ($devices | ConvertTo-Json)
     '''
     result = subprocess.run(
         ["powershell", "-Command", bt_command],
@@ -223,14 +237,11 @@ def get_bluetooth_battery():
     )
     if result.returncode != 0:
         raise Exception(f"Error executing PowerShell: {result.stderr}")
-    r = result.stdout.strip()
     try:
-        batteries = {}
-        for line in r.split("\n"):
-            batteries[line.split(",,,")[0]] = int(line.split(",,,")[1])
-        return batteries
-    except  Exception as e:
-        return {}
+        r = result.stdout
+        return json.loads(r)
+    except:
+        return None
     
 def get_last_boot():
 
@@ -263,6 +274,28 @@ def get_bt_info():
     log.info(response)
     return battery_level
 
+
+def get_default_interface():
+    # Get default gateway details
+    gateways = psutil.net_if_addrs()
+    default_gateway = psutil.net_if_stats()
+    for interface, status in default_gateway.items():
+        if status.isup:
+            return interface
+    return None
+
+def get_network_info(interface=get_default_interface()):
+    network_info = {'MAC':None,'IP':None}
+    if not interface:
+        return network_info
+    addrs = psutil.net_if_addrs().get(interface, [])
+    
+    for addr in addrs:
+        if addr.family == socket.AF_INET:
+            network_info['IP'] = addr.address
+        elif addr.family == psutil.AF_LINK:
+            network_info['MAC'] = addr.address
+    return network_info
 
 if __name__ == "__main__":
     global log_path
